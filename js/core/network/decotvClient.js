@@ -49,10 +49,36 @@ export class DecoTVClient {
 
   async _fetch(url, options = {}) {
     if (!this.baseURL) throw new Error("API_URL_NOT_SET");
+    // Default timeout: 10s. Caller can override via options.timeoutMs = 0 (no timeout)
+    // or pass their own AbortController via options.signal (timeout is skipped).
+    const timeoutMs = options.timeoutMs ?? 10000;
+    const callerSignal = options.signal;
+    if (timeoutMs > 0 && !callerSignal) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(`${this.baseURL}${url}`, {
+          credentials: "include",
+          ...options,
+          signal: controller.signal,
+        });
+        return this._checkResponse(response);
+      } catch (e) {
+        if (e?.name === "AbortError") throw new Error("TIMEOUT");
+        throw e;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    // No timeout or caller has own signal — pass through directly.
     const response = await fetch(`${this.baseURL}${url}`, {
       credentials: "include",
-      ...options
+      ...options,
     });
+    return this._checkResponse(response);
+  }
+
+  _checkResponse(response) {
     if (response.status === 401) {
       // Global 401 hook — authManager will navigate to login/server screen.
       if (typeof this.onUnauthorized === "function") {

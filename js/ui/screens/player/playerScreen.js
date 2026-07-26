@@ -5,7 +5,8 @@ import { ScreenUtils } from "../../navigation/screen.js";
 import { Router } from "../../navigation/router.js";
 import { api } from "../../../core/network/decotvClient.js";
 import { LocalLibrary } from "../../../core/storage/localLibrary.js";
-import { showToast } from "../../../core/network/toast.js";
+import { showToast } from "../../toast.js";
+import { escapeHtml, escapeAttr, formatTime } from "../../utils.js";
 
 // How often playback progress is persisted to /api/playrecords while watching.
 const RECORD_SAVE_INTERVAL_MS = 10000;
@@ -26,15 +27,6 @@ const ICONS = {
   // Skip forward 30s (double right triangle)
   forward: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 6 L19 12 L13 18 Z M6 6 L12 12 L6 18 Z"/></svg>'
 };
-
-function formatTime(s) {
-  const t = Math.max(0, Math.floor(Number(s || 0)));
-  const h = Math.floor(t / 3600);
-  const m = Math.floor((t % 3600) / 60);
-  const sec = t % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
-  return `${m}:${String(sec).padStart(2, "0")}`;
-}
 
 export const PlayerScreen = {
   container: null,
@@ -485,8 +477,8 @@ export const PlayerScreen = {
           const isCurrent = key === this.currentSourceKey;
           const probeLine = this._probeLineHtml(r);
           return `
-            <div class="player-side-item${isCurrent ? " selected" : ""} focusable" data-panel-source-key="${this._escapeAttr(key)}" data-panel-index="${i}">
-              <div class="player-side-item-label">${this._escape(src.source_name || src.source)}${isCurrent ? " · 正在播放" : ""}</div>
+            <div class="player-side-item${isCurrent ? " selected" : ""} focusable" data-panel-source-key="${escapeAttr(key)}" data-panel-index="${i}">
+              <div class="player-side-item-label">${escapeHtml(src.source_name || src.source)}${isCurrent ? " · 正在播放" : ""}</div>
               <div class="player-side-item-sub">${probeLine}</div>
             </div>
           `;
@@ -495,7 +487,7 @@ export const PlayerScreen = {
     `;
     this.container.appendChild(panel);
     ScreenUtils.indexFocusables(panel, ".focusable");
-    const target = panel.querySelector(`[data-panel-source-key="${this._escapeAttr(getSourceProbeKey(this.allSources[this.sourcePanelIndex] || this.allSources[0]))}"]`)
+    const target = panel.querySelector(`[data-panel-source-key="${escapeAttr(getSourceProbeKey(this.allSources[this.sourcePanelIndex] || this.allSources[0]))}"]`)
       || panel.querySelector(".player-side-item");
     if (target) {
       panel.querySelectorAll(".focused").forEach((n) => n.classList.remove("focused"));
@@ -507,12 +499,12 @@ export const PlayerScreen = {
 
   _probeLineHtml(r) {
     if (!r) return "未测速";
-    if (r.hasError || r.status === "failed") return `✕ ${this._escape((r.message || "失败").slice(0, 28))}`;
+    if (r.hasError || r.status === "failed") return `✕ ${escapeHtml((r.message || "失败").slice(0, 28))}`;
     if (isVerifiedPlaybackResult(r)) {
       const speed = r.speedKBps ? `${(r.speedKBps / 1024).toFixed(2)} MB/s` : (r.loadSpeed || "—");
-      return `✓ ${this._escape(r.quality || "—")} · ${this._escape(speed)} · ${r.pingTime || 0} ms`;
+      return `✓ ${escapeHtml(r.quality || "—")} · ${escapeHtml(speed)} · ${r.pingTime || 0} ms`;
     }
-    return `◐ ${this._escape((r.message || "可播").slice(0, 28))}`;
+    return `◐ ${escapeHtml((r.message || "可播").slice(0, 28))}`;
   },
 
   _closeSourcePanel() {
@@ -798,14 +790,5 @@ export const PlayerScreen = {
     this.container?.querySelector("#playerEpisodePanel")?.remove();
     ScreenUtils.hide(this.container);
     if (this.container) this.container.style.opacity = "1";
-  },
-
-  _escape(s) {
-    return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  },
-
-  // Attribute-safe escape: also neutralizes backtick and quotes used in template literals.
-  _escapeAttr(s) {
-    return String(s ?? "").replace(/[&<>"'`]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" }[c]));
   }
 };

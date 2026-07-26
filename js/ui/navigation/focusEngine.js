@@ -83,8 +83,10 @@ function isNativeInputElement(el) {
 
 export const FocusEngine = {
   lastBackHandledAt: 0,
+  router: null,
 
-  init() {
+  init(router) {
+    this.router = router;
     this.boundHandleKey = this.handleKey.bind(this);
     document.addEventListener("keydown", this.boundHandleKey, true);
     this.initClickSupport();
@@ -102,7 +104,7 @@ export const FocusEngine = {
         el.focus();
         return;
       }
-      const screen = window.__currentScreen;
+      const screen = this.router?.getCurrentScreen?.();
       if (!screen) return;
       const allFocusable = document.querySelectorAll(".focusable");
       allFocusable.forEach((node) => node.classList.remove("focused"));
@@ -125,9 +127,9 @@ export const FocusEngine = {
       event.preventDefault?.();
       event.stopPropagation?.();
       event.stopImmediatePropagation?.();
-      const currentScreen = window.__currentScreen;
+      const currentScreen = this.router?.getCurrentScreen?.();
       if (currentScreen?.consumeBackRequest?.()) return;
-      window.__router?.back?.();
+      this.router?.back?.();
       return;
     }
 
@@ -137,6 +139,6 @@ export const FocusEngine = {
       event.preventDefault?.();
     }
 
-    window.__currentScreen?.onKeyDown?.(normalizedEvent);
+    this.router?.getCurrentScreen?.()?.onKeyDown?.(normalizedEvent);
   }
 };

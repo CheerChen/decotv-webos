@@ -4,6 +4,8 @@
 import { ScreenUtils } from "../../navigation/screen.js";
 import { Router } from "../../navigation/router.js";
 import { api } from "../../../core/network/decotvClient.js";
+import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
+import { escapeHtml } from "../../utils.js";
 
 const PAGE_SIZE = 24;
 
@@ -104,27 +106,17 @@ export const SearchScreen = {
     this.selectedWeekday = this.type === "anime" ? todayWeekday() : null;
     this.selectedYear = "all";
     this.selectedSort = "U";
+    const activeTab = `nav-${this.type}`;
     this.container.innerHTML = `
-      <div class="app-header">
-        <div class="brand">DecoTV</div>
-        <div class="nav-tabs">
-          <div class="nav-tab focusable" data-action="nav-home">首页</div>
-          <div class="nav-tab focusable${this.type === "movie" ? " active" : ""}" data-action="nav-movie">电影</div>
-          <div class="nav-tab focusable${this.type === "tv" ? " active" : ""}" data-action="nav-tv">剧集</div>
-          <div class="nav-tab focusable${this.type === "anime" ? " active" : ""}" data-action="nav-anime">动漫</div>
-          <div class="nav-tab focusable${this.type === "show" ? " active" : ""}" data-action="nav-show">综艺</div>
-          <div class="nav-tab focusable" data-action="nav-library">收藏</div>
-          <div class="nav-tab focusable" data-action="nav-settings">设置</div>
-        </div>
-      </div>
+      ${renderNavHeader(activeTab)}
       <div class="content-scroll" id="searchScroll">
         <div id="searchFilters"></div>
         <div id="searchBody"><div class="center-wrap"><div class="loading-spinner"></div></div></div>
       </div>
     `;
     ScreenUtils.show(this.container);
+    bindNavClicks(this.container);
     this._renderFilters();
-    this._bindNav();
     this._loadCategory();
   },
 
@@ -138,7 +130,7 @@ export const SearchScreen = {
       const label = typeof tag === "string" ? tag : tag.label;
       const value = typeof tag === "string" ? tag : tag.value;
       const active = value === this.selectedTag ? " active" : "";
-      return `<button class="btn chip focusable${active}" data-action="select-tag" data-value="${this._escape(value)}" data-label="${this._escape(label)}">${label}</button>`;
+      return `<button class="btn chip focusable${active}" data-action="select-tag" data-value="${escapeHtml(value)}" data-label="${escapeHtml(label)}">${label}</button>`;
     }).join("");
 
     // Weekday chips for anime "每日放送".
@@ -199,7 +191,7 @@ export const SearchScreen = {
     } catch (e) {
       this.loading = false;
       if (e?.name === "AbortError") return;
-      body.innerHTML = `<div class="empty-state">加载失败：${this._escape(e?.message || e)}</div>`;
+      body.innerHTML = `<div class="empty-state">加载失败：${escapeHtml(e?.message || e)}</div>`;
     }
   },
 
@@ -255,9 +247,9 @@ export const SearchScreen = {
     }
     const cards = this.results.slice(0, 120).map((r, i) => {
       const poster = api.getImageProxyUrl(r.poster);
-      const title = this._escape(r.title || r.name_cn || r.name || "");
-      const year = this._escape(r.year || "");
-      const rate = r.rate ? `<span class="rate-badge">★ ${this._escape(r.rate)}</span>` : "";
+      const title = escapeHtml(r.title || r.name_cn || r.name || "");
+      const year = escapeHtml(r.year || "");
+      const rate = r.rate ? `<span class="rate-badge">★ ${escapeHtml(r.rate)}</span>` : "";
       const sub = `${rate}${year ? `<span>${year}</span>` : ""}`;
       return `
         <div class="poster-card focusable" data-action="open-douban" data-index="${i}">
@@ -270,7 +262,7 @@ export const SearchScreen = {
       `;
     }).join("");
     const cfg = TYPE_CONFIGS[this.type];
-    const heading = `${cfg.label} · ${this._escape(this._currentTagLabel())}`;
+    const heading = `${cfg.label} · ${escapeHtml(this._currentTagLabel())}`;
     body.innerHTML = `<div class="section-title">${heading}</div><div class="poster-grid">${cards}</div>`;
     ScreenUtils.indexFocusables(body);
   },
@@ -280,22 +272,6 @@ export const SearchScreen = {
     const tag = cfg.tags.find((t) => (typeof t === "string" ? t === this.selectedTag : t.value === this.selectedTag));
     if (typeof tag === "string") return tag;
     return tag?.label || this.selectedTag;
-  },
-
-  _bindNav() {
-    this.container.querySelectorAll('.nav-tab[data-action^="nav-"]').forEach((tab) => {
-      tab.addEventListener("click", (e) => {
-        e.preventDefault();
-        const action = tab.dataset.action;
-        if (action === "nav-home") Router.navigate("home", {});
-        else if (action === "nav-movie") Router.navigate("search", { type: "movie" });
-        else if (action === "nav-tv") Router.navigate("search", { type: "tv" });
-        else if (action === "nav-anime") Router.navigate("search", { type: "anime" });
-        else if (action === "nav-show") Router.navigate("search", { type: "show" });
-        else if (action === "nav-library") Router.navigate("library", {});
-        else if (action === "nav-settings") Router.navigate("settings", {});
-      });
-    });
   },
 
   async onKeyDown(event) {
@@ -343,19 +319,9 @@ export const SearchScreen = {
         Router.navigate("detail", { title: r.title, poster: r.poster, year: r.year, autoPlay: true });
         return;
       }
-      // Nav tabs — handle here for remote OK button (click events don't fire on TV).
-      if (action === "nav-home") { Router.navigate("home", {}); return; }
-      if (action === "nav-movie") { Router.navigate("search", { type: "movie" }); return; }
-      if (action === "nav-tv") { Router.navigate("search", { type: "tv" }); return; }
-      if (action === "nav-anime") { Router.navigate("search", { type: "anime" }); return; }
-      if (action === "nav-show") { Router.navigate("search", { type: "show" }); return; }
-      if (action === "nav-library") { Router.navigate("library", {}); return; }
-      if (action === "nav-settings") { Router.navigate("settings", {}); return; }
+      // Nav tabs — handleNavAction covers all nav-* dispatching.
+      if (handleNavAction(action)) return;
     }
-  },
-
-  _escape(s) {
-    return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   },
 
   cleanup() {

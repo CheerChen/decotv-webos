@@ -5,7 +5,9 @@ import { Router } from "../../navigation/router.js";
 import { AuthManager } from "../../../core/auth/authManager.js";
 import { api, STORAGE_BASEURL } from "../../../core/network/decotvClient.js";
 import { LocalStore } from "../../../core/storage/localStore.js";
-import { showToast } from "../../../core/network/toast.js";
+import { showToast } from "../../toast.js";
+import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
+import { escapeHtml } from "../../utils.js";
 
 export const SettingsScreen = {
   container: null,
@@ -18,40 +20,29 @@ export const SettingsScreen = {
     const storageType = AuthManager.serverConfig?.StorageType || "—";
     const authMode = AuthManager.serverConfig?.AuthMode || "—";
     this.container.innerHTML = `
-      <div class="app-header">
-        <div class="brand">DecoTV</div>
-        <div class="nav-tabs">
-          <div class="nav-tab focusable" data-action="nav-home">首页</div>
-          <div class="nav-tab focusable" data-action="nav-movie">电影</div>
-          <div class="nav-tab focusable" data-action="nav-tv">剧集</div>
-          <div class="nav-tab focusable" data-action="nav-anime">动漫</div>
-          <div class="nav-tab focusable" data-action="nav-show">综艺</div>
-          <div class="nav-tab focusable" data-action="nav-library">收藏</div>
-          <div class="nav-tab focusable active" data-action="nav-settings">设置</div>
-        </div>
-      </div>
+      ${renderNavHeader("nav-settings")}
       <div class="content-scroll" id="settingsScroll">
         <div class="section-title">服务器</div>
         <div class="settings-list">
           <div class="settings-item">
             <div class="settings-label">站点名称</div>
-            <div class="settings-value">${this._escape(siteName)}</div>
+            <div class="settings-value">${escapeHtml(siteName)}</div>
           </div>
           <div class="settings-item">
             <div class="settings-label">服务器地址</div>
-            <div class="settings-value">${this._escape(baseUrl)}</div>
+            <div class="settings-value">${escapeHtml(baseUrl)}</div>
           </div>
           <div class="settings-item">
             <div class="settings-label">版本</div>
-            <div class="settings-value">${this._escape(version)}</div>
+            <div class="settings-value">${escapeHtml(version)}</div>
           </div>
           <div class="settings-item">
             <div class="settings-label">存储模式</div>
-            <div class="settings-value">${this._escape(storageType)}</div>
+            <div class="settings-value">${escapeHtml(storageType)}</div>
           </div>
           <div class="settings-item">
             <div class="settings-label">认证模式</div>
-            <div class="settings-value">${this._escape(authMode)}</div>
+            <div class="settings-value">${escapeHtml(authMode)}</div>
           </div>
           <div class="settings-item focusable" data-action="change-server">
             <div class="settings-label">切换服务器</div>
@@ -61,24 +52,8 @@ export const SettingsScreen = {
       </div>
     `;
     ScreenUtils.show(this.container);
-    this._bindNav();
+    bindNavClicks(this.container);
     ScreenUtils.setInitialFocus(this.container.querySelector('.settings-item[data-action="change-server"]'));
-  },
-
-  _bindNav() {
-    this.container.querySelectorAll('.nav-tab[data-action^="nav-"]').forEach((tab) => {
-      tab.addEventListener("click", (e) => {
-        e.preventDefault();
-        const action = tab.dataset.action;
-        if (action === "nav-home") Router.navigate("home", {});
-        if (action === "nav-movie") Router.navigate("search", { type: "movie" });
-        if (action === "nav-tv") Router.navigate("search", { type: "tv" });
-        if (action === "nav-anime") Router.navigate("search", { type: "anime" });
-        if (action === "nav-show") Router.navigate("search", { type: "show" });
-        if (action === "nav-library") Router.navigate("library", {});
-        if (action === "nav-settings") return;
-      });
-    });
   },
 
   async onKeyDown(event) {
@@ -96,14 +71,8 @@ export const SettingsScreen = {
         Router.navigate("server", {}, { replaceHistory: true });
         return;
       }
-      if (action === "nav-home") { Router.navigate("home", {}); return; }
-      if (action === "nav-search") { Router.navigate("search", {}); return; }
-      if (action === "nav-library") { Router.navigate("library", {}); return; }
+      if (handleNavAction(action)) return;
     }
-  },
-
-  _escape(s) {
-    return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   },
 
   cleanup() {

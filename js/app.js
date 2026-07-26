@@ -4,7 +4,7 @@ import { Router } from "./ui/navigation/router.js";
 import { FocusEngine } from "./ui/navigation/focusEngine.js";
 import { AuthManager, AuthState } from "./core/auth/authManager.js";
 import { api } from "./core/network/decotvClient.js";
-import { LocalLibrary } from "./core/storage/localLibrary.js";
+import { LocalLibrary, SCHEMA_VERSION } from "./core/storage/localLibrary.js";
 
 import { SplashScreen } from "./ui/screens/splash/splashScreen.js";
 import { ServerScreen } from "./ui/screens/server/serverScreen.js";
@@ -31,9 +31,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   // One-time migration: old versions stored play records per-source; the new
   // per-movie key scheme makes those entries orphans, so wipe them on first
   // launch of the new version.
-  LocalLibrary.migrateRecordsIfNeeded("0.2.9");
+  LocalLibrary.migrateRecordsIfNeeded();
   Router.init();
-  FocusEngine.init();
+  FocusEngine.init(Router);
 
   // Global 401 handler — silently re-establish the session (real creds if we
   // have them, else anonymous). Does NOT navigate: a personal-endpoint 401 while

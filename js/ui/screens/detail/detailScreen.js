@@ -15,7 +15,9 @@ import { ScreenUtils } from "../../navigation/screen.js";
 import { Router } from "../../navigation/router.js";
 import { api } from "../../../core/network/decotvClient.js";
 import { LocalLibrary } from "../../../core/storage/localLibrary.js";
-import { showToast } from "../../../core/network/toast.js";
+import { showToast } from "../../toast.js";
+import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
+import { escapeHtml } from "../../utils.js";
 import {
   comparePlaybackMetrics,
   getSourceProbeKey,
@@ -75,8 +77,11 @@ export const DetailScreen = {
   probeTotal: 0,
   preferCancelled: false,
   detail: null,
+  _mountEpoch: 0,        // race guard: incremented on each mount; stale probe workers check and bail
 
   async mount(params = {}, opts = {}) {
+    this._mountEpoch++;
+    const epoch = this._mountEpoch;
     this.container = document.getElementById("detail");
     this.probeResults = new Map();
     this.probeRunning = false;
@@ -165,7 +170,7 @@ export const DetailScreen = {
     this._maybeFetchDetail();
     this._renderSourceList();
     this._renderEpisodes();
-    this._setStatus(`已选「${this._escape(this.currentSource?.source_name || this.currentSource?.source || "")}」`);
+    this._setStatus(`已选「${escapeHtml(this.currentSource?.source_name || this.currentSource?.source || "")}」`);
     const playBtn = this.container.querySelector('.btn[data-action="play"]');
     if (playBtn) {
       playBtn.disabled = false;
@@ -177,20 +182,9 @@ export const DetailScreen = {
 
   _renderSkeleton() {
     const poster = api.getImageProxyUrl(this.poster);
-    const title = this._escape(this.title);
+    const title = escapeHtml(this.title);
     this.container.innerHTML = `
-      <div class="app-header">
-        <div class="brand">DecoTV</div>
-        <div class="nav-tabs">
-          <div class="nav-tab focusable" data-action="nav-home">首页</div>
-          <div class="nav-tab focusable" data-action="nav-movie">电影</div>
-          <div class="nav-tab focusable" data-action="nav-tv">剧集</div>
-          <div class="nav-tab focusable" data-action="nav-anime">动漫</div>
-          <div class="nav-tab focusable" data-action="nav-show">综艺</div>
-          <div class="nav-tab focusable" data-action="nav-library">收藏</div>
-          <div class="nav-tab focusable" data-action="nav-settings">设置</div>
-        </div>
-      </div>
+      ${renderNavHeader()}
       <div class="content-scroll" id="detailScroll">
         <div class="detail-hero">
           <img class="detail-poster" src="${poster}" alt="" onerror="this.style.opacity=0.1" />
@@ -214,23 +208,7 @@ export const DetailScreen = {
         <div class="episodes-list" id="episodesList" style="display:none;"></div>
       </div>
     `;
-    this._bindNav();
-  },
-
-  _bindNav() {
-    this.container.querySelectorAll('.nav-tab[data-action^="nav-"]').forEach((tab) => {
-      tab.addEventListener("click", (e) => {
-        e.preventDefault();
-        const action = tab.dataset.action;
-        if (action === "nav-home") Router.navigate("home", {});
-        if (action === "nav-movie") Router.navigate("search", { type: "movie" });
-        if (action === "nav-tv") Router.navigate("search", { type: "tv" });
-        if (action === "nav-anime") Router.navigate("search", { type: "anime" });
-        if (action === "nav-show") Router.navigate("search", { type: "show" });
-        if (action === "nav-library") Router.navigate("library", {});
-        if (action === "nav-settings") Router.navigate("settings", {});
-      });
-    });
+    bindNavClicks(this.container);
   },
 
   _setStatus(text) {
@@ -239,9 +217,11 @@ export const DetailScreen = {
   },
 
   async _searchAndPrefer() {
+    const epoch = this._mountEpoch;
     this._setStatus("🔍 正在搜索播放源…");
     try {
       const data = await api.searchVideos(this.title);
+      if (epoch !== this._mountEpoch) return; // stale — newer mount won
       const all = Array.isArray(data?.results) ? data.results : [];
       const searchType = all.length ? inferSearchType(all[0].episodes) : null;
       this.sources = all.filter((r) => {
@@ -260,18 +240,19 @@ export const DetailScreen = {
       }
       if (!this.sources.length) {
         this._setStatus("未找到匹配的播放源");
-        this.container.querySelector("#sourceList").innerHTML = `<div class="empty-state">没有「${this._escape(this.title)}」的可用源</div>`;
+        this.container.querySelector("#sourceList").innerHTML = `<div class="empty-state">没有「${escapeHtml(this.title)}」的可用源</div>`;
         return;
       }
       this._renderSourceList();
       await this._probeAndPick();
     } catch (e) {
-      this._setStatus(`搜索失败：${this._escape(e?.message || e)}`);
+      this._setStatus(`搜索失败：${escapeHtml(e?.message || e)}`);
     }
   },
 
   async _probeAndPick() {
     if (!this.sources.length) return;
+    const epoch = this._mountEpoch;
     this.probeRunning = true;
     this.probeDone = 0;
     this.probeTotal = this.sources.length;
@@ -300,9 +281,11 @@ export const DetailScreen = {
       }
       try {
         const probe = await api.probePlayback(episodeUrl, source.source, PROBE_TIMEOUT_MS, controller.signal);
+        if (epoch !== this._mountEpoch) return { source, testResult: { stale: true } }; // stale
         this.probeResults.set(key, probe);
         return { source, testResult: probe };
       } catch (e) {
+        if (epoch !== this._mountEpoch) return { source, testResult: { stale: true } }; // stale
         if (controller.signal.aborted) {
           // Deadline abort — record a timeout-style failure, not a crash.
           const fail = { hasError: true, status: "failed", failureKind: "timeout", message: "测速超时" };
@@ -317,6 +300,7 @@ export const DetailScreen = {
 
     const maybeAutoPlay = (bestSoFar) => {
       if (autoPlayFired || !this.autoPlay || this.preferCancelled) return;
+      if (epoch !== this._mountEpoch) return; // stale — don't start playback on wrong movie
       if (verifiedCount < PREFER_MIN_VERIFIED_FOR_AUTOPLAY && this.probeDone < this.probeTotal) return;
       autoPlayFired = true;
       // Pick the best among results so far, then start playback.
@@ -329,7 +313,7 @@ export const DetailScreen = {
       this.currentSource = best;
       this._renderSourceList();
       this._renderEpisodes();
-      this._setStatus(`✨ 已选「${this._escape(best.source_name || best.source)}」，准备播放`);
+      this._setStatus(`✨ 已选「${escapeHtml(best.source_name || best.source)}」，准备播放`);
       // Fire and forget — do NOT await. Awaiting would block the worker from
       // probing the remaining sources. _startPlayback navigates to the player,
       // but the probe workers keep running in the background (they only hold
@@ -341,9 +325,11 @@ export const DetailScreen = {
 
     const worker = async () => {
       while (!controller.signal.aborted) {
+        if (epoch !== this._mountEpoch) return; // stale — newer mount won
         const i = nextIndex++;
         if (i >= this.sources.length) return;
         const r = await probeOne(this.sources[i]);
+        if (r.testResult?.stale) return; // stale — bail
         results.push(r);
         this.probeDone++;
         if (isVerifiedPlaybackResult(r.testResult) && (r.testResult.startupTimeMs || Infinity) <= PROBE_TIMEOUT_MS) {
@@ -363,6 +349,7 @@ export const DetailScreen = {
 
     await Promise.all(Array.from({ length: Math.min(PREFER_CONCURRENCY, this.sources.length) }, () => worker()));
     clearTimeout(deadline);
+    if (epoch !== this._mountEpoch) return; // stale — don't finalize on wrong movie
     this.probeRunning = false;
 
     // Final selection: rank every result now that all probes are done.
@@ -379,7 +366,7 @@ export const DetailScreen = {
     this.currentSource = best;
     this._renderSourceList();
     this._renderEpisodes();
-    this._setStatus(`✨ 已选「${this._escape(best.source_name || best.source)}」，准备播放`);
+    this._setStatus(`✨ 已选「${escapeHtml(best.source_name || best.source)}」，准备播放`);
     // Enable the play button and focus it.
     const playBtn = this.container.querySelector('.btn[data-action="play"]');
     if (playBtn) {
@@ -417,8 +404,8 @@ export const DetailScreen = {
       const probeCell = this._renderProbeCell(r);
       const epCount = Array.isArray(src.episodes) ? src.episodes.length : 0;
       return `
-        <div class="source-row${isCurrent ? " current" : ""} focusable" data-action="switch-source" data-key="${this._escape(key)}">
-          <div class="source-row-name">${this._escape(src.source_name || src.source)}</div>
+        <div class="source-row${isCurrent ? " current" : ""} focusable" data-action="switch-source" data-key="${escapeHtml(key)}">
+          <div class="source-row-name">${escapeHtml(src.source_name || src.source)}</div>
           <div class="source-row-meta">${epCount} 集</div>
           <div class="source-row-probe">${probeCell}</div>
         </div>
@@ -431,18 +418,18 @@ export const DetailScreen = {
   _renderProbeCell(r) {
     if (!r) return `<span class="probe-pending">待测速</span>`;
     if (r.hasError || r.status === "failed") {
-      return `<span class="probe-failed">✕ ${this._escape(r.message || "失败").slice(0, 24)}</span>`;
+      return `<span class="probe-failed">✕ ${escapeHtml(r.message || "失败").slice(0, 24)}</span>`;
     }
     if (isVerifiedPlaybackResult(r)) {
-      const q = this._escape(r.quality || "—");
-      const speed = r.speedKBps ? `${(r.speedKBps / 1024).toFixed(2)} MB/s` : (this._escape(r.loadSpeed || "") || "—");
+      const q = escapeHtml(r.quality || "—");
+      const speed = r.speedKBps ? `${(r.speedKBps / 1024).toFixed(2)} MB/s` : (escapeHtml(r.loadSpeed || "") || "—");
       const ping = r.pingTime ? `${r.pingTime} ms` : "—";
       return `<span class="probe-ok">✓ ${q} · ${speed} · ${ping}</span>`;
     }
     if (isPlayableFallbackResult(r)) {
-      return `<span class="probe-partial">◐ ${this._escape(r.message || "可播").slice(0, 24)}</span>`;
+      return `<span class="probe-partial">◐ ${escapeHtml(r.message || "可播").slice(0, 24)}</span>`;
     }
-    return `<span class="probe-partial">◐ ${this._escape(r.message || "部分").slice(0, 24)}</span>`;
+    return `<span class="probe-partial">◐ ${escapeHtml(r.message || "部分").slice(0, 24)}</span>`;
   },
 
   _renderEpisodes() {
@@ -469,16 +456,16 @@ export const DetailScreen = {
       const cast = this.container.querySelector("#detailCast");
       if (cast) {
         const parts = [];
-        if (detail.director) parts.push(`导演：${this._escape(detail.director)}`);
-        if (detail.actor) parts.push(`主演：${this._escape(detail.actor)}`);
-        if (detail.remarks) parts.push(this._escape(detail.remarks));
+        if (detail.director) parts.push(`导演：${escapeHtml(detail.director)}`);
+        if (detail.actor) parts.push(`主演：${escapeHtml(detail.actor)}`);
+        if (detail.remarks) parts.push(escapeHtml(detail.remarks));
         cast.innerHTML = parts.join("<br>") || "—";
       }
       const desc = this.container.querySelector("#detailDesc");
       if (desc && detail.desc) desc.textContent = detail.desc;
       const tags = this.container.querySelector("#detailTags");
       if (tags) {
-        const year = this._escape(detail.year || this.year || "");
+        const year = escapeHtml(detail.year || this.year || "");
         const t = ["movie", "tv"].includes(detail.type) ? (detail.type === "tv" ? "剧集" : "电影") : "";
         const ep = Array.isArray(detail.episodes) ? `${detail.episodes.length} 集` : "";
         tags.innerHTML = [year, t, ep].filter(Boolean).map((x) => `<span>${x}</span>`).join("");
@@ -570,7 +557,7 @@ export const DetailScreen = {
         this.episodeIndex = 0;
         this._renderSourceList();
         this._renderEpisodes();
-        this._setStatus(`已切换到「${this._escape(src.source_name || src.source)}」`);
+        this._setStatus(`已切换到「${escapeHtml(src.source_name || src.source)}」`);
         // Pull probe results for this source's episodes if missing.
         this._maybeFetchDetail();
         return;
@@ -583,14 +570,7 @@ export const DetailScreen = {
         return;
       }
       if (action === "back") { Router.back(); return; }
-      // Nav tabs — handle here for remote OK button (click events don't fire on TV).
-      if (action === "nav-home") { Router.navigate("home", {}); return; }
-      if (action === "nav-movie") { Router.navigate("search", { type: "movie" }); return; }
-      if (action === "nav-tv") { Router.navigate("search", { type: "tv" }); return; }
-      if (action === "nav-anime") { Router.navigate("search", { type: "anime" }); return; }
-      if (action === "nav-show") { Router.navigate("search", { type: "show" }); return; }
-      if (action === "nav-library") { Router.navigate("library", {}); return; }
-      if (action === "nav-settings") { Router.navigate("settings", {}); return; }
+      if (handleNavAction(action)) return;
     }
   },
 
@@ -614,10 +594,6 @@ export const DetailScreen = {
       year: r.year || this.year || ""
     });
     showToast("已收藏");
-  },
-
-  _escape(s) {
-    return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   },
 
   cleanup() {

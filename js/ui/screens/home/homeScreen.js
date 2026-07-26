@@ -4,8 +4,10 @@
 import { ScreenUtils } from "../../navigation/screen.js";
 import { Router } from "../../navigation/router.js";
 import { api } from "../../../core/network/decotvClient.js";
-import { showToast } from "../../../core/network/toast.js";
+import { showToast } from "../../toast.js";
 import { LocalLibrary } from "../../../core/storage/localLibrary.js";
+import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
+import { escapeHtml, formatTime } from "../../utils.js";
 
 const ROWS = [
   { type: "movie", tag: "热门", title: "热门电影" },
@@ -28,23 +30,13 @@ export const HomeScreen = {
     this.rowsData = [];
     this.loading = true;
     this.container.innerHTML = `
-      <div class="app-header">
-        <div class="brand">DecoTV</div>
-        <div class="nav-tabs">
-          <div class="nav-tab focusable active" data-action="nav-home">首页</div>
-          <div class="nav-tab focusable" data-action="nav-movie">电影</div>
-          <div class="nav-tab focusable" data-action="nav-tv">剧集</div>
-          <div class="nav-tab focusable" data-action="nav-anime">动漫</div>
-          <div class="nav-tab focusable" data-action="nav-show">综艺</div>
-          <div class="nav-tab focusable" data-action="nav-library">收藏</div>
-          <div class="nav-tab focusable" data-action="nav-settings">设置</div>
-        </div>
-      </div>
+      ${renderNavHeader("nav-home")}
       <div class="content-scroll" id="homeScroll">
         <div class="center-wrap" id="homeLoading"><div class="loading-spinner"></div></div>
       </div>
     `;
     ScreenUtils.show(this.container);
+    bindNavClicks(this.container);
     ScreenUtils.setInitialFocus(this.container.querySelector('.nav-tab[data-action="nav-home"]'));
     this._loadRows();
   },
@@ -113,14 +105,14 @@ export const HomeScreen = {
     this.historyRecords = entries;
     const cards = entries.map(([key, rec], idx) => {
       const poster = api.getImageProxyUrl(rec.cover);
-      const title = this._escape(rec.title || "");
+      const title = escapeHtml(rec.title || "");
       const ep = rec.total_episodes > 1 && rec.index ? `看到第 ${rec.index} 集` : "";
       const progress = rec.total_time > 0
-        ? `${this._fmtTime(rec.play_time)} / ${this._fmtTime(rec.total_time)}`
+        ? `${formatTime(rec.play_time)} / ${formatTime(rec.total_time)}`
         : "";
       const sub = [ep, progress].filter(Boolean).join(" · ");
       return `
-        <div class="poster-card focusable" data-action="open-rec" data-key="${this._escape(key)}" data-col="${idx}">
+        <div class="poster-card focusable" data-action="open-rec" data-key="${escapeHtml(key)}" data-col="${idx}">
           <img class="poster-img" src="${poster}" alt="" loading="lazy" onerror="this.style.opacity=0.1" />
           <div class="poster-meta">
             <div class="poster-title">${title}</div>
@@ -133,15 +125,6 @@ export const HomeScreen = {
       <div class="section-title">继续观看</div>
       <div class="poster-row" data-row="history">${cards}</div>
     `;
-  },
-
-  _fmtTime(s) {
-    const t = Math.max(0, Math.floor(Number(s || 0)));
-    const h = Math.floor(t / 3600);
-    const m = Math.floor((t % 3600) / 60);
-    const sec = t % 60;
-    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
-    return `${m}:${String(sec).padStart(2, "0")}`;
   },
 
   _renderRow(row, list, rowIndex) {
@@ -157,11 +140,11 @@ export const HomeScreen = {
 
   _renderCard(item, rowIndex, idx) {
     const poster = api.getImageProxyUrl(item.poster);
-    const title = this._escape(item.title || "");
-    const rate = item.rate ? `<span class="rate-badge">★ ${this._escape(item.rate)}</span>` : "";
-    const year = item.year ? this._escape(item.year) : "";
+    const title = escapeHtml(item.title || "");
+    const rate = item.rate ? `<span class="rate-badge">★ ${escapeHtml(item.rate)}</span>` : "";
+    const year = item.year ? escapeHtml(item.year) : "";
     return `
-      <div class="poster-card focusable" data-action="open-douban" data-title="${title}" data-poster="${this._escape(poster)}" data-row="${rowIndex}" data-col="${idx}">
+      <div class="poster-card focusable" data-action="open-douban" data-title="${title}" data-poster="${escapeHtml(poster)}" data-row="${rowIndex}" data-col="${idx}">
         <img class="poster-img" src="${poster}" alt="" loading="lazy" onerror="this.style.opacity=0.1" />
         <div class="poster-meta">
           <div class="poster-title">${title}</div>
@@ -196,22 +179,13 @@ export const HomeScreen = {
         return;
       }
       if (action === "nav-home") return;
-      if (action === "nav-movie") { Router.navigate("search", { type: "movie" }); return; }
-      if (action === "nav-tv") { Router.navigate("search", { type: "tv" }); return; }
-      if (action === "nav-anime") { Router.navigate("search", { type: "anime" }); return; }
-      if (action === "nav-show") { Router.navigate("search", { type: "show" }); return; }
-      if (action === "nav-library") { Router.navigate("library", {}); return; }
-      if (action === "nav-settings") { Router.navigate("settings", {}); return; }
+      if (handleNavAction(action)) return;
     }
   },
 
   consumeBackRequest() {
     // Back on home → let router close app (handled in router).
     return false;
-  },
-
-  _escape(s) {
-    return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   },
 
   cleanup() {

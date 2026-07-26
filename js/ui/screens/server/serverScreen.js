@@ -2,7 +2,7 @@
 
 import { ScreenUtils } from "../../navigation/screen.js";
 import { AuthManager, AuthState } from "../../../core/auth/authManager.js";
-import { showToast } from "../../../core/network/toast.js";
+import { showToast } from "../../toast.js";
 
 export const ServerScreen = {
   container: null,

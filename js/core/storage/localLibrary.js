@@ -13,6 +13,10 @@ const FAVORITES_KEY = "decotv.local.favorites";
 const RECORDS_KEY = "decotv.local.playRecords";
 const RECORDS_MIGRATED_KEY = "decotv.local.playRecords.migratedVersion";
 
+// Storage schema version — decoupled from app version. Bump this when the
+// localStorage format changes and a migration is needed.
+export const SCHEMA_VERSION = "2";
+
 function now() {
   return Date.now();
 }
@@ -30,13 +34,15 @@ export const LocalLibrary = {
   },
 
   // One-time migration: old versions used `source+id` keys. On first launch
-  // of the new version, wipe all play records so stale per-source entries
-  // don't linger as orphans. Gated by a version flag so it only fires once.
-  migrateRecordsIfNeeded(currentVersion) {
+  // of the new schema, wipe all play records so stale per-source entries
+  // don't linger as orphans. Gated by SCHEMA_VERSION so it only fires once.
+  // SCHEMA_VERSION is decoupled from app version — bump it only when a
+  // storage format change requires migration.
+  migrateRecordsIfNeeded() {
     const migrated = LocalStore.get(RECORDS_MIGRATED_KEY, "");
-    if (migrated === currentVersion) return;
+    if (migrated === SCHEMA_VERSION) return;
     LocalStore.remove(RECORDS_KEY);
-    LocalStore.set(RECORDS_MIGRATED_KEY, currentVersion);
+    LocalStore.set(RECORDS_MIGRATED_KEY, SCHEMA_VERSION);
   },
 
   // ── Favorites ─────────────────────────────────────────────────────────────
