@@ -6,10 +6,15 @@ import { Router } from "./router.js";
 // Tab definitions: data-action → route + params.
 const NAV_TABS = [
   { action: "nav-home", label: "首页", route: "home", params: {} },
+  { action: "nav-hot-movie", label: "热门电影", route: "search", params: { type: "hot-movie" } },
   { action: "nav-movie", label: "电影", route: "search", params: { type: "movie" } },
+  { action: "nav-hot-tv", label: "热门剧集", route: "search", params: { type: "hot-tv" } },
   { action: "nav-tv", label: "剧集", route: "search", params: { type: "tv" } },
+  { action: "nav-hot-anime", label: "热门动漫", route: "search", params: { type: "hot-anime" } },
   { action: "nav-anime", label: "动漫", route: "search", params: { type: "anime" } },
+  { action: "nav-hot-show", label: "热门综艺", route: "search", params: { type: "hot-show" } },
   { action: "nav-show", label: "综艺", route: "search", params: { type: "show" } },
+  { action: "nav-documentary", label: "纪录片", route: "search", params: { type: "documentary" } },
   { action: "nav-library", label: "收藏", route: "library", params: {} },
   { action: "nav-settings", label: "设置", route: "settings", params: {} },
 ];

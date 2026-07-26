@@ -24,7 +24,7 @@
 
 .app-header .nav-tabs {
   display: flex;
-  gap: 36px;
+  gap: 24px;
   flex: 1;
 }
 
