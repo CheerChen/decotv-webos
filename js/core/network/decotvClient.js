@@ -1,0 +1,228 @@
+// decotvClient.js — DecoTV / LunaTV-compatible API client for webOS.
+// Ported from OrionTV services/api.ts (TypeScript → vanilla JS).
+// AsyncStorage → localStorage; cookie handling delegated to fetch credentials:'include'.
+// Verified against DecoTV 1.5.0 (kvrocks storage, public auth mode) on 2026-07-26.
+
+import { LocalStore } from "../storage/localStore.js";
+
+// region: --- Types (documentation only, JS) ---
+// DoubanItem       { id, title, poster, rate, year }
+// DoubanResponse   { code, message, list: DoubanItem[] }
+// SearchResult     { id, title, poster, episodes: string[], source, source_name, year, type_name, desc }
+// VideoDetail      { id, title, poster, source, source_name, episodes: string[], desc, year, director, actor, remarks }
+// Favorite         { cover, title, source_name, total_episodes, search_title, year, save_time }
+// PlayRecord       { title, source_name, cover, index, total_episodes, play_time, total_time, save_time, year }
+// ApiSite          { key, name, api, detail, is_adult, from, disabled }
+// ServerConfig     { SiteName, StorageType, AuthMode, Version, ... }
+
+const STORAGE_BASEURL = "decotv.apiBaseUrl";
+const STORAGE_SERVERCONFIG = "decotv.serverConfig";
+
+export class DecoTVClient {
+  constructor(baseURL) {
+    this.baseURL = baseURL || "";
+    this.onUnauthorized = null;
+  }
+
+  setBaseUrl(url) {
+    this.baseURL = url;
+    if (url) LocalStore.set(STORAGE_BASEURL, url);
+    else LocalStore.remove(STORAGE_BASEURL);
+  }
+
+  getStoredBaseUrl() {
+    return LocalStore.get(STORAGE_BASEURL, null);
+  }
+
+  getStoredServerConfig() {
+    return LocalStore.get(STORAGE_SERVERCONFIG, null);
+  }
+
+  setStoredServerConfig(cfg) {
+    if (cfg) LocalStore.set(STORAGE_SERVERCONFIG, cfg);
+    else LocalStore.remove(STORAGE_SERVERCONFIG);
+  }
+
+  setUnauthorizedHandler(fn) {
+    this.onUnauthorized = fn;
+  }
+
+  async _fetch(url, options = {}) {
+    if (!this.baseURL) throw new Error("API_URL_NOT_SET");
+    const response = await fetch(`${this.baseURL}${url}`, {
+      credentials: "include",
+      ...options
+    });
+    if (response.status === 401) {
+      // Global 401 hook — authManager will navigate to login/server screen.
+      if (typeof this.onUnauthorized === "function") {
+        try { this.onUnauthorized(); } catch (_) {}
+      }
+      throw new Error("UNAUTHORIZED");
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response;
+  }
+
+  // ── Auth ────────────────────────────────────────────────────────────────
+
+  async login(username, password) {
+    const response = await this._fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: username ?? undefined, password: password ?? undefined })
+    });
+    return response.json();
+  }
+
+  async logout() {
+    try {
+      await this._fetch("/api/logout", { method: "POST" });
+    } catch (e) {
+      // best-effort: network errors don't block local cleanup
+    }
+    return { ok: true };
+  }
+
+  async getServerConfig() {
+    const response = await this._fetch("/api/server-config");
+    return response.json();
+  }
+
+  // ── Catalog (Douban) ────────────────────────────────────────────────────
+  // Verified shape: { code:200, message, list:[{id,title,poster,rate,year}] }
+
+  async getDoubanData(type, tag, pageSize = 24, pageStart = 0) {
+    const url = `/api/douban?type=${encodeURIComponent(type)}&tag=${encodeURIComponent(tag)}&pageSize=${pageSize}&pageStart=${pageStart}`;
+    const response = await this._fetch(url);
+    return response.json();
+  }
+
+  // ── Search ──────────────────────────────────────────────────────────────
+  // Verified shape: { results: SearchResult[] }, episodes is array of playable URLs.
+
+  async searchVideos(query) {
+    const url = `/api/search?q=${encodeURIComponent(query)}`;
+    const response = await this._fetch(url);
+    return response.json();
+  }
+
+  async searchOne(query, resourceId, signal) {
+    const url = `/api/search/one?q=${encodeURIComponent(query)}&resourceId=${encodeURIComponent(resourceId)}`;
+    const response = await this._fetch(url, { signal });
+    return response.json();
+  }
+
+  async getResources(signal) {
+    const response = await this._fetch("/api/search/resources", { signal });
+    return response.json();
+  }
+
+  // ── Detail ──────────────────────────────────────────────────────────────
+  // Verified: detail also returns episodes[] (OrionTV interface omitted this).
+
+  async getVideoDetail(source, id) {
+    const url = `/api/detail?source=${encodeURIComponent(source)}&id=${encodeURIComponent(id)}`;
+    const response = await this._fetch(url);
+    return response.json();
+  }
+
+  // ── Playback resolve (fallback; search/detail usually return playable URLs already) ─
+
+  async resolvePlayback(url, source) {
+    const u = `/api/playback/resolve?url=${encodeURIComponent(url)}&source=${encodeURIComponent(source)}`;
+    const response = await this._fetch(u);
+    return response.json();
+  }
+
+  // ── Playback probe (source speed/quality test) ──────────────────────────
+  // Mirrors DecoTV web client probePlaybackSourceOnServer. Returns:
+  //   { quality, loadSpeed, pingTime, speedKBps, startupTimeMs, hasError,
+  //     status, playable, message, failureKind, mediaType,
+  //     originalUrl, resolvedUrl, playbackUrl, resolved, proxied, testedAt }
+  async probePlayback(url, source, timeoutMs = 8000, signal) {
+    const u = `/api/playback/probe?url=${encodeURIComponent(url)}&source=${encodeURIComponent(source)}&timeoutMs=${timeoutMs}`;
+    const response = await this._fetch(u, { signal });
+    return response.json();
+  }
+
+  // ── Favorites ───────────────────────────────────────────────────────────
+
+  async getFavorites(key) {
+    const url = key ? `/api/favorites?key=${encodeURIComponent(key)}` : "/api/favorites";
+    const response = await this._fetch(url);
+    return response.json();
+  }
+
+  async addFavorite(key, favorite) {
+    const response = await this._fetch("/api/favorites", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, favorite })
+    });
+    return response.json();
+  }
+
+  async deleteFavorite(key) {
+    const url = key ? `/api/favorites?key=${encodeURIComponent(key)}` : "/api/favorites";
+    const response = await this._fetch(url, { method: "DELETE" });
+    return response.json();
+  }
+
+  // ── Play records ────────────────────────────────────────────────────────
+
+  async getPlayRecords() {
+    const response = await this._fetch("/api/playrecords");
+    return response.json();
+  }
+
+  async savePlayRecord(key, record) {
+    const response = await this._fetch("/api/playrecords", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, record })
+    });
+    return response.json();
+  }
+
+  async deletePlayRecord(key) {
+    const url = key ? `/api/playrecords?key=${encodeURIComponent(key)}` : "/api/playrecords";
+    const response = await this._fetch(url, { method: "DELETE" });
+    return response.json();
+  }
+
+  // ── Search history ──────────────────────────────────────────────────────
+
+  async getSearchHistory() {
+    const response = await this._fetch("/api/searchhistory");
+    return response.json();
+  }
+
+  async addSearchHistory(keyword) {
+    const response = await this._fetch("/api/searchhistory", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keyword })
+    });
+    return response.json();
+  }
+
+  async deleteSearchHistory(keyword) {
+    const url = keyword ? `/api/searchhistory?keyword=${encodeURIComponent(keyword)}` : "/api/searchhistory";
+    const response = await this._fetch(url, { method: "DELETE" });
+    return response.json();
+  }
+
+  // ── Image proxy URL builder (no fetch — used in <img src>) ───────────────
+
+  getImageProxyUrl(imageUrl) {
+    if (!this.baseURL || !imageUrl) return imageUrl;
+    if (imageUrl.startsWith(this.baseURL) || imageUrl.startsWith("/api/")) {
+      return imageUrl.startsWith("http") ? imageUrl : `${this.baseURL}${imageUrl}`;
+    }
+    return `${this.baseURL}/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
+  }
+}
+
+export const api = new DecoTVClient();
+export { STORAGE_BASEURL };

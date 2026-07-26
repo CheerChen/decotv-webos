@@ -1,0 +1,11 @@
+# Build artifacts
+*.ipk
+
+# Dependencies
+node_modules/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

@@ -1,0 +1,620 @@
+/* Components: poster card, buttons, badges, player OSD, side panels */
+
+.poster-card {
+  width: 220px;
+  flex: 0 0 auto;
+  background: var(--bg-elev);
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+  position: relative;
+  scroll-snap-align: start;
+}
+
+.poster-card .poster-img {
+  width: 100%;
+  height: 320px;
+  object-fit: cover;
+  background: var(--bg-elev-2);
+  display: block;
+}
+
+.poster-card .poster-meta {
+  padding: 12px 14px 14px;
+  box-sizing: border-box;
+}
+
+.poster-card .poster-title {
+  font-size: 18px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-color);
+}
+
+.poster-card .poster-sub {
+  font-size: 14px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.poster-card .rate-badge {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.poster-card.focused {
+  transform: scale(1.06);
+  box-shadow: 0 0 0 3px var(--focus-ring), 0 12px 32px rgba(0, 0, 0, 0.5);
+  z-index: 5;
+}
+
+.btn {
+  min-width: 160px;
+  height: 56px;
+  padding: 0 32px;
+  background: var(--bg-elev-2);
+  color: var(--text-color);
+  border: none;
+  border-radius: 8px;
+  font-size: 22px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 160ms ease, transform 160ms ease;
+}
+
+.btn.focused {
+  background: var(--accent);
+  color: var(--bg-color);
+  transform: scale(1.04);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.btn.primary {
+  background: var(--accent-dim);
+  color: var(--bg-color);
+}
+
+.btn.primary.focused {
+  background: var(--accent);
+}
+
+.btn.ghost {
+  background: transparent;
+  border: 2px solid var(--bg-elev-2);
+}
+
+.btn.ghost.focused {
+  border-color: var(--accent);
+  background: rgba(94, 234, 212, 0.08);
+}
+
+.loading-spinner {
+  width: 56px;
+  height: 56px;
+  border: 4px solid var(--bg-elev-2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.empty-state {
+  color: var(--text-dim);
+  font-size: 22px;
+  text-align: center;
+  padding: 80px 0;
+}
+
+/* Detail screen */
+
+.detail-hero {
+  display: flex;
+  gap: 40px;
+  padding: 24px 0 32px;
+}
+
+.detail-hero .detail-poster {
+  width: 280px;
+  height: 400px;
+  object-fit: cover;
+  border-radius: 12px;
+  background: var(--bg-elev-2);
+  flex-shrink: 0;
+}
+
+.detail-hero .detail-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.detail-hero .detail-title {
+  font-size: 42px;
+  font-weight: 700;
+  margin: 0 0 12px;
+}
+
+.detail-hero .detail-tags {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  color: var(--text-dim);
+  font-size: 18px;
+  margin-bottom: 20px;
+}
+
+.detail-hero .detail-tags span {
+  background: var(--bg-elev-2);
+  padding: 4px 14px;
+  border-radius: 999px;
+}
+
+.detail-hero .detail-desc {
+  font-size: 20px;
+  line-height: 1.6;
+  color: var(--text-color);
+  margin-bottom: 20px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.detail-hero .detail-cast {
+  font-size: 17px;
+  color: var(--text-dim);
+  margin-bottom: 24px;
+  line-height: 1.5;
+}
+
+.episodes-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.episode-item {
+  height: 64px;
+  background: var(--bg-elev);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: var(--text-color);
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.episode-item.focused {
+  background: var(--accent);
+  color: var(--bg-color);
+  transform: scale(1.05);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.source-pill {
+  display: inline-block;
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 14px;
+  margin-left: 8px;
+}
+
+/* Player OSD */
+
+.player-ui-root {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.player-controls-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.55) 0%, rgba(0, 0, 0, 0) 25%, rgba(0, 0, 0, 0) 70%, rgba(0, 0, 0, 0.7) 100%);
+  transition: opacity 220ms ease;
+}
+
+.player-controls-overlay.hidden {
+  opacity: 0;
+}
+
+.player-controls-top {
+  position: absolute;
+  top: 28px;
+  left: 48px;
+  right: 48px;
+  display: flex;
+  justify-content: space-between;
+  font-size: 22px;
+  color: var(--text-color);
+}
+
+.player-controls-bottom {
+  position: absolute;
+  bottom: 36px;
+  left: 48px;
+  right: 48px;
+}
+
+.player-meta .player-title {
+  font-size: 30px;
+  font-weight: 700;
+}
+
+.player-meta .player-subtitle {
+  font-size: 20px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+.player-progress-track {
+  position: relative;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  margin: 20px 0 16px;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.player-progress-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--accent);
+  border-radius: 3px;
+  width: 0%;
+}
+
+.player-progress-thumb {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  background: var(--accent);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  left: 0%;
+}
+
+.player-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  pointer-events: auto;
+}
+
+.player-control-buttons {
+  display: flex;
+  gap: 18px;
+}
+
+.player-control-btn {
+  width: 56px;
+  height: 56px;
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  border-radius: 50%;
+  color: var(--text-color);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 600;
+  transition: background 160ms ease, transform 160ms ease;
+}
+
+.player-control-btn.focused {
+  background: var(--accent);
+  color: var(--bg-color);
+  transform: scale(1.1);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.player-control-btn.active {
+  background: var(--accent-dim);
+  color: var(--bg-color);
+}
+
+.player-control-btn img {
+  width: 28px;
+  height: 28px;
+}
+
+.player-control-btn svg {
+  width: 26px;
+  height: 26px;
+  fill: currentColor;
+  display: block;
+}
+
+/* Text controls (换源/列表/返回) use a pill instead of a fixed circle. */
+.player-control-btn-text {
+  width: auto;
+  min-width: 88px;
+  padding: 0 22px;
+  border-radius: 28px;
+  font-size: 20px;
+}
+
+.player-time-label {
+  font-size: 20px;
+  color: var(--text-color);
+  margin-left: auto;
+}
+
+.player-loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  flex-direction: column;
+  gap: 20px;
+  pointer-events: none;
+}
+
+.player-loading-overlay.hidden {
+  display: none;
+}
+
+/* Player side panel (episodes/sources) */
+
+.player-side-panel {
+  position: absolute;
+  top: 100px;
+  right: 48px;
+  bottom: 140px;
+  width: 420px;
+  background: rgba(20, 22, 26, 0.97);
+  border: 1px solid var(--bg-elev-2);
+  border-radius: 12px;
+  padding: 24px;
+  box-sizing: border-box;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.player-side-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.player-side-panel-title {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.player-side-panel-close {
+  background: transparent;
+  border: 1px solid var(--bg-elev-2);
+  color: var(--text-dim);
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.player-side-panel-close.focused {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.player-side-panel-hint {
+  font-size: 14px;
+  color: var(--text-dim);
+  margin-bottom: 16px;
+}
+
+.player-side-panel-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.player-side-item {
+  background: var(--bg-elev);
+  padding: 14px 18px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 18px;
+}
+
+.player-side-item.selected {
+  border-left: 3px solid var(--accent);
+}
+
+.player-side-item.focused {
+  background: var(--bg-elev-2);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.player-side-item-label {
+  font-weight: 500;
+}
+
+.player-side-item-sub {
+  font-size: 14px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+.player-side-empty {
+  color: var(--text-dim);
+  text-align: center;
+  padding: 40px 0;
+}
+
+/* Splash — matches assets/splash.png (native splashBackground) */
+
+.splash-wrap {
+  background:
+    radial-gradient(circle at 50% 44%, rgba(94, 234, 212, 0.10) 0%, rgba(94, 234, 212, 0) 42%),
+    var(--bg-color);
+}
+
+.splash-mark {
+  position: relative;
+  width: 130px;
+  height: 130px;
+  margin-bottom: 34px;
+}
+
+.splash-ring {
+  position: absolute;
+  inset: 0;
+  border: 8px solid var(--accent);
+  border-radius: 50%;
+}
+
+.splash-d {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 68px;
+  font-weight: 800;
+  color: var(--text-color);
+}
+
+.splash-word {
+  font-size: 52px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  margin-bottom: 18px;
+}
+
+.splash-word .splash-word-tv {
+  color: var(--accent);
+}
+
+.splash-status {
+  font-size: 20px;
+  color: var(--text-dim);
+}
+
+/* Settings list */
+
+.settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 800px;
+}
+
+.settings-item {
+  background: var(--bg-elev);
+  border-radius: 10px;
+  padding: 24px 28px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.settings-item.focused {
+  transform: scale(1.01);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.settings-item .settings-label {
+  font-size: 22px;
+}
+
+.settings-item .settings-value {
+  font-size: 18px;
+  color: var(--text-dim);
+}
+
+/* Source list (detail screen) — ranked after probe */
+
+.source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 1100px;
+}
+
+.source-row {
+  display: grid;
+  grid-template-columns: 220px 80px 1fr;
+  gap: 16px;
+  align-items: center;
+  background: var(--bg-elev);
+  border-radius: 10px;
+  padding: 18px 22px;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+  border-left: 3px solid transparent;
+}
+
+.source-row.current {
+  border-left-color: var(--accent);
+}
+
+.source-row.focused {
+  transform: scale(1.01);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.source-row-name {
+  font-size: 20px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.source-row-meta {
+  font-size: 16px;
+  color: var(--text-dim);
+}
+
+.source-row-probe {
+  font-size: 16px;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.probe-ok {
+  color: var(--accent);
+}
+
+.probe-partial {
+  color: #facc15;
+}
+
+.probe-failed {
+  color: var(--danger);
+}
+
+.probe-pending {
+  color: var(--text-dim);
+}

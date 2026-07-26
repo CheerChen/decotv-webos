@@ -1,0 +1,68 @@
+:root {
+  --bg-color: #0e0f12;
+  --bg-elev: #1a1c20;
+  --bg-elev-2: #23262c;
+  --text-color: #f5f8fc;
+  --text-dim: #8a9099;
+  --accent: #5eead4;
+  --accent-dim: #2dd4bf;
+  --danger: #f87171;
+  --focus-ring: rgba(94, 234, 212, 0.9);
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: var(--bg-color);
+  color: var(--text-color);
+  font-family: "Montserrat", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#app {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.screen {
+  display: none;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+*:focus {
+  outline: none !important;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 120px;
+  transform: translateX(-50%);
+  background: rgba(20, 22, 26, 0.95);
+  border: 1px solid var(--accent-dim);
+  color: var(--text-color);
+  padding: 16px 28px;
+  border-radius: 8px;
+  font-size: 22px;
+  z-index: 9999;
+  opacity: 0;
+  transition: opacity 200ms ease;
+  pointer-events: none;
+}
+
+.toast.visible {
+  opacity: 1;
+}

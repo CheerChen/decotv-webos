@@ -1,0 +1,20 @@
+{
+  "id": "com.cheerchen.decotv",
+  "version": "0.2.9",
+  "vendor": "CheerChen",
+  "type": "web",
+  "main": "index.html",
+  "title": "DecoTV",
+  "icon": "assets/icons/icon.png",
+  "largeIcon": "assets/icons/icon-large.png",
+  "splashBackground": "assets/splash.png",
+  "bgImage": "assets/splash.png",
+  "bgColor": "#0e0f12",
+  "iconColor": "#0e0f12",
+  "resolution": "1920x1080",
+  "transparent": false,
+  "requiredPermissions": [
+    "media.operation",
+    "internet"
+  ]
+}
