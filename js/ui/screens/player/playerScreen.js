@@ -52,6 +52,7 @@ export const PlayerScreen = {
   sourcePanelIndex: 0,
   allSources: [],
   probeResults: new Map(),
+  failedSourceKeys: new Set(),
   currentSourceKey: "",
   focusZone: "controls",
   _listeners: [],
@@ -60,6 +61,7 @@ export const PlayerScreen = {
   recordMeta: null,       // { source, id, title, cover, source_name, year, total_episodes }
   _lastSaveAt: 0,
   _isExiting: false,      // re-entrancy guard for stop+exit (back key / error / ended)
+  _playToken: 0,          // race guard: each _playIndex call gets a token; stale async results are discarded
 
   async mount(params = {}) {
     this.container = document.getElementById("player");
@@ -76,6 +78,7 @@ export const PlayerScreen = {
     this.probeResults = new Map(
       Array.isArray(params.probeResults) ? params.probeResults.map(([k, v]) => [k, v]) : []
     );
+    this.failedSourceKeys = new Set();
     this.currentSourceKey = params.currentSourceKey || "";
     this.focusZone = "controls";
     this._listeners = [];
@@ -84,6 +87,7 @@ export const PlayerScreen = {
     this.recordMeta = params.record || null;
     this._lastSaveAt = 0;
     this._isExiting = false;
+    this._playToken = 0;
 
     this.container.innerHTML = `
       <video id="videoPlayer" autoplay playsinline webkit-playsinline preload="auto"
@@ -96,6 +100,7 @@ export const PlayerScreen = {
               <div class="player-title" id="playerTitle"></div>
               <div class="player-subtitle" id="playerSubtitle"></div>
             </div>
+            <div class="player-osd-stats" id="playerOsdStats"></div>
           </div>
           <div class="player-controls-bottom">
             <div class="player-progress-track" id="playerProgress">
@@ -147,7 +152,10 @@ export const PlayerScreen = {
       this.container.querySelector("#playerLoading")?.classList.add("hidden");
       this._applyResume();
     });
-    on("loadedmetadata", () => this._applyResume());
+    on("loadedmetadata", () => {
+      this._applyResume();
+      this._updateResolutionFromVideo();
+    });
     on("playing", () => {
       this.paused = false;
       this.container.querySelector("#playerLoading")?.classList.add("hidden");
@@ -155,15 +163,34 @@ export const PlayerScreen = {
     });
     on("pause", () => { this.paused = true; this._renderButtons(); this._saveRecord(true); });
     on("ended", () => this._handleEnded());
-    on("error", () => {
+    on("error", (e) => {
       this.container.querySelector("#playerLoading")?.classList.add("hidden");
-      showToast("播放错误，尝试下一集");
-      this._advanceOrExit();
+      const v = this.video;
+      const debug = {
+        sourceKey: this.currentSourceKey,
+        sourceName: this.params?.sourceName || "",
+        url: this.episodes?.[this.index] || "",
+        episode: this.index + 1,
+        videoState: {
+          readyState: v?.readyState,
+          networkState: v?.networkState,
+          error: v?.error ? { code: v.error.code, message: v.error.message } : null,
+          currentTime: v?.currentTime,
+          duration: v?.duration,
+          videoWidth: v?.videoWidth,
+          videoHeight: v?.videoHeight,
+        },
+      };
+      console.error("[DecoTV] playback error", JSON.stringify(debug));
+      this._handlePlaybackError(debug);
     });
   },
 
-  _playIndex(idx) {
+  async _playIndex(idx) {
     if (idx < 0 || idx >= this.episodes.length) return;
+    // Race guard: each call gets a unique token. After any await, if the token
+    // no longer matches, a newer _playIndex has started — abort silently.
+    const token = ++this._playToken;
     // Switching episodes (panel pick / auto-advance): persist the outgoing
     // episode first, then start the new one from the beginning (no resume).
     const switching = this._resumeApplied;
@@ -174,9 +201,37 @@ export const PlayerScreen = {
     }
     this.index = idx;
     this.episodePanelIndex = idx;
-    const url = this.episodes[idx];
+    const rawUrl = this.episodes[idx];
     this.container.querySelector("#playerLoading")?.classList.remove("hidden");
-    this.video.src = url;
+
+    // Resolve playback page URLs to direct m3u8/mp4 via DecoTV server.
+    // Resource sites return HTML player pages (e.g. /play/xxx); the native
+    // <video> element cannot parse them. /api/playback/resolve fetches the
+    // page and extracts the real stream URL.
+    let playUrl = rawUrl;
+    if (rawUrl && !this._isDirectMediaUrl(rawUrl)) {
+      const source = this._currentSourceName();
+      try {
+        const res = await api.resolvePlayback(rawUrl, source);
+        if (token !== this._playToken) return; // stale — newer _playIndex won
+        if (res?.playbackUrl) playUrl = res.playbackUrl;
+        else if (res?.resolvedUrl) playUrl = res.resolvedUrl;
+        else {
+          // Resolve returned no usable URL — treat as source failure.
+          console.error("[DecoTV] resolvePlayback empty", { rawUrl, source, res });
+          this._handlePlaybackError({ sourceKey: this.currentSourceKey, sourceName: this.params?.sourceName || "", url: rawUrl, resolveEmpty: true });
+          return;
+        }
+      } catch (e) {
+        if (token !== this._playToken) return; // stale — newer _playIndex won
+        // Resolve failed (502/timeout/etc) — don't feed raw page URL to video.
+        console.error("[DecoTV] resolvePlayback failed", { rawUrl, source, error: e?.message || e });
+        this._handlePlaybackError({ sourceKey: this.currentSourceKey, sourceName: this.params?.sourceName || "", url: rawUrl, resolveError: e?.message || String(e) });
+        return;
+      }
+    }
+
+    this.video.src = playUrl;
     this.video.load();
     const playPromise = this.video.play();
     if (playPromise && typeof playPromise.catch === "function") {
@@ -185,25 +240,60 @@ export const PlayerScreen = {
     this._updateMeta();
   },
 
+  // Check if URL is already a direct media stream (m3u8/mp4/etc) that <video>
+  // can play without server-side resolution.
+  _isDirectMediaUrl(url) {
+    if (!url) return false;
+    // Internal proxy URLs are already playable.
+    if (url.includes("/api/proxy/m3u8")) return true;
+    // Direct media file extensions.
+    return /\.(m3u8|mp4|m4v|webm|mkv|mov|flv)(\?|#|$)/i.test(url);
+  },
+
+  // Extract source key for resolve API from current source.
+  _currentSourceName() {
+    const src = this.allSources.find((s) => getSourceProbeKey(s) === this.currentSourceKey);
+    return src?.source || this.currentSourceKey?.split("-")[0] || "";
+  },
+
   _updateMeta() {
     const title = this.params?.title || "";
     const sourceName = this.params?.sourceName || "";
     const epLabel = this.episodes.length > 1 ? `第 ${this.index + 1} 集 / 共 ${this.episodes.length} 集` : "";
-    const probeInfo = this._currentProbeInfo();
     this.container.querySelector("#playerTitle").textContent = title;
     this.container.querySelector("#playerSubtitle").textContent =
-      [sourceName, epLabel, probeInfo].filter(Boolean).join(" · ");
+      [sourceName, epLabel].filter(Boolean).join(" · ");
+    this._updateOsdStats();
   },
 
-  // Build a short "1080p · 656ms" string from the current source's probe
-  // result so the user can see what quality/latency the active stream has.
-  _currentProbeInfo() {
-    if (!this.currentSourceKey || !this.probeResults) return "";
-    const r = this.probeResults.get(this.currentSourceKey);
-    if (!r || r.hasError) return "";
-    const q = r.quality && r.quality !== "未知" ? r.quality : "";
-    const ping = r.pingTime ? `${r.pingTime}ms` : "";
-    return [q, ping].filter(Boolean).join(" · ");
+  // Update OSD with real-time decode resolution + buffer length.
+  // Called from _updateMeta, loadedmetadata, and _tick.
+  _updateOsdStats() {
+    const el = this.container.querySelector("#playerOsdStats");
+    if (!el) return;
+    const v = this.video;
+    const parts = [];
+    // Actual decode resolution from video element.
+    if (v && v.videoWidth && v.videoHeight) {
+      parts.push(`${v.videoWidth}×${v.videoHeight}`);
+    }
+    // Buffer length ahead of current position.
+    if (v && v.buffered && v.buffered.length > 0) {
+      const cur = v.currentTime || 0;
+      for (let i = 0; i < v.buffered.length; i++) {
+        if (v.buffered.start(i) <= cur && v.buffered.end(i) >= cur) {
+          const bufSec = v.buffered.end(i) - cur;
+          if (bufSec > 0) parts.push(`缓冲 ${bufSec.toFixed(0)}s`);
+          break;
+        }
+      }
+    }
+    el.textContent = parts.join(" · ");
+  },
+
+  // Read actual decode resolution from the video element and update OSD.
+  _updateResolutionFromVideo() {
+    this._updateOsdStats();
   },
 
   _tick() {
@@ -215,6 +305,7 @@ export const PlayerScreen = {
     this.container.querySelector("#playerProgressFill").style.width = `${pct}%`;
     this.container.querySelector("#playerProgressThumb").style.left = `${pct}%`;
     this.container.querySelector("#playerTime").textContent = `${formatTime(cur)} / ${formatTime(dur)}`;
+    this._updateOsdStats();
     if (!this._resumeApplied) this._applyResume(); // retry until metadata is ready
     // Persist progress periodically while actually playing.
     if (!v.paused && cur > 0) {
@@ -268,6 +359,42 @@ export const PlayerScreen = {
 
   _handleEnded() {
     this._advanceOrExit();
+  },
+
+  // Playback error → mark current source failed, switch to next available.
+  _handlePlaybackError(debug) {
+    if (this._isExiting) return;
+    this.failedSourceKeys.add(this.currentSourceKey);
+    // Determine error label: prefer video.error.code (playback stage),
+    // fall back to debug.resolveError/resolveEmpty (resolve stage).
+    const v = this.video;
+    const errCode = v?.error?.code;
+    const errMap = { 1: "ABORTED", 2: "NETWORK", 3: "DECODE", 4: "SRC_NOT_SUPPORTED" };
+    let errLabel = errMap[errCode] || "";
+    if (!errLabel) {
+      if (debug?.resolveError) errLabel = "RESOLVE_FAIL";
+      else if (debug?.resolveEmpty) errLabel = "RESOLVE_EMPTY";
+      else errLabel = "ERR";
+    }
+    const srcName = debug?.sourceName || "?";
+    const failedCount = this.failedSourceKeys.size;
+    const total = this.allSources.length;
+    console.error(`[DecoTV] ${errLabel} on "${srcName}" (${failedCount}/${total} failed)`, debug);
+    // Find next source that hasn't failed yet.
+    const next = this.allSources.find((s) => {
+      const key = getSourceProbeKey(s);
+      return !this.failedSourceKeys.has(key);
+    });
+    if (next) {
+      const key = getSourceProbeKey(next);
+      showToast(`${errLabel} · ${srcName} → 换源`);
+      this._switchToSourceKey(key);
+    } else {
+      // All sources exhausted → back to detail.
+      showToast(`全部源不可用 · ${errLabel}`);
+      this._stopAndExit();
+      Router.back();
+    }
   },
 
   _advanceOrExit() {

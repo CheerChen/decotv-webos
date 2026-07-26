@@ -32,7 +32,10 @@ export const HomeScreen = {
         <div class="brand">DecoTV</div>
         <div class="nav-tabs">
           <div class="nav-tab focusable active" data-action="nav-home">首页</div>
-          <div class="nav-tab focusable" data-action="nav-search">搜索</div>
+          <div class="nav-tab focusable" data-action="nav-movie">电影</div>
+          <div class="nav-tab focusable" data-action="nav-tv">剧集</div>
+          <div class="nav-tab focusable" data-action="nav-anime">动漫</div>
+          <div class="nav-tab focusable" data-action="nav-show">综艺</div>
           <div class="nav-tab focusable" data-action="nav-library">收藏</div>
           <div class="nav-tab focusable" data-action="nav-settings">设置</div>
         </div>
@@ -193,7 +196,10 @@ export const HomeScreen = {
         return;
       }
       if (action === "nav-home") return;
-      if (action === "nav-search") { Router.navigate("search", {}); return; }
+      if (action === "nav-movie") { Router.navigate("search", { type: "movie" }); return; }
+      if (action === "nav-tv") { Router.navigate("search", { type: "tv" }); return; }
+      if (action === "nav-anime") { Router.navigate("search", { type: "anime" }); return; }
+      if (action === "nav-show") { Router.navigate("search", { type: "show" }); return; }
       if (action === "nav-library") { Router.navigate("library", {}); return; }
       if (action === "nav-settings") { Router.navigate("settings", {}); return; }
     }

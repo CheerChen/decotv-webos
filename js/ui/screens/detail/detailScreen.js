@@ -183,7 +183,10 @@ export const DetailScreen = {
         <div class="brand">DecoTV</div>
         <div class="nav-tabs">
           <div class="nav-tab focusable" data-action="nav-home">首页</div>
-          <div class="nav-tab focusable" data-action="nav-search">搜索</div>
+          <div class="nav-tab focusable" data-action="nav-movie">电影</div>
+          <div class="nav-tab focusable" data-action="nav-tv">剧集</div>
+          <div class="nav-tab focusable" data-action="nav-anime">动漫</div>
+          <div class="nav-tab focusable" data-action="nav-show">综艺</div>
           <div class="nav-tab focusable" data-action="nav-library">收藏</div>
           <div class="nav-tab focusable" data-action="nav-settings">设置</div>
         </div>
@@ -220,7 +223,10 @@ export const DetailScreen = {
         e.preventDefault();
         const action = tab.dataset.action;
         if (action === "nav-home") Router.navigate("home", {});
-        if (action === "nav-search") Router.navigate("search", { q: this.title });
+        if (action === "nav-movie") Router.navigate("search", { type: "movie" });
+        if (action === "nav-tv") Router.navigate("search", { type: "tv" });
+        if (action === "nav-anime") Router.navigate("search", { type: "anime" });
+        if (action === "nav-show") Router.navigate("search", { type: "show" });
         if (action === "nav-library") Router.navigate("library", {});
         if (action === "nav-settings") Router.navigate("settings", {});
       });
@@ -577,8 +583,12 @@ export const DetailScreen = {
         return;
       }
       if (action === "back") { Router.back(); return; }
+      // Nav tabs — handle here for remote OK button (click events don't fire on TV).
       if (action === "nav-home") { Router.navigate("home", {}); return; }
-      if (action === "nav-search") { Router.navigate("search", { q: this.title }); return; }
+      if (action === "nav-movie") { Router.navigate("search", { type: "movie" }); return; }
+      if (action === "nav-tv") { Router.navigate("search", { type: "tv" }); return; }
+      if (action === "nav-anime") { Router.navigate("search", { type: "anime" }); return; }
+      if (action === "nav-show") { Router.navigate("search", { type: "show" }); return; }
       if (action === "nav-library") { Router.navigate("library", {}); return; }
       if (action === "nav-settings") { Router.navigate("settings", {}); return; }
     }

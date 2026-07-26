@@ -22,7 +22,10 @@ export const SettingsScreen = {
         <div class="brand">DecoTV</div>
         <div class="nav-tabs">
           <div class="nav-tab focusable" data-action="nav-home">首页</div>
-          <div class="nav-tab focusable" data-action="nav-search">搜索</div>
+          <div class="nav-tab focusable" data-action="nav-movie">电影</div>
+          <div class="nav-tab focusable" data-action="nav-tv">剧集</div>
+          <div class="nav-tab focusable" data-action="nav-anime">动漫</div>
+          <div class="nav-tab focusable" data-action="nav-show">综艺</div>
           <div class="nav-tab focusable" data-action="nav-library">收藏</div>
           <div class="nav-tab focusable active" data-action="nav-settings">设置</div>
         </div>
@@ -68,7 +71,10 @@ export const SettingsScreen = {
         e.preventDefault();
         const action = tab.dataset.action;
         if (action === "nav-home") Router.navigate("home", {});
-        if (action === "nav-search") Router.navigate("search", {});
+        if (action === "nav-movie") Router.navigate("search", { type: "movie" });
+        if (action === "nav-tv") Router.navigate("search", { type: "tv" });
+        if (action === "nav-anime") Router.navigate("search", { type: "anime" });
+        if (action === "nav-show") Router.navigate("search", { type: "show" });
         if (action === "nav-library") Router.navigate("library", {});
         if (action === "nav-settings") return;
       });

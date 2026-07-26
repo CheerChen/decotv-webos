@@ -98,6 +98,47 @@ export class DecoTVClient {
     return response.json();
   }
 
+  // Douban sub-category API (tv/show with region/type filters).
+  // kind: "tv" | "movie", category: e.g. "最近热门", type: e.g. "tv", "tv_domestic", "show"
+  async getDoubanCategories(kind, category, type, limit = 24, start = 0) {
+    const params = new URLSearchParams({
+      kind, category, type,
+      limit: String(limit),
+      start: String(start),
+      proxyType: "auto",
+    });
+    const response = await this._fetch(`/api/douban/categories?${params}`);
+    return response.json();
+  }
+
+  // Douban recommends API (anime 番剧/剧场版, movie/tv "全部" with multi-level filters).
+  async getDoubanRecommends(kind, opts = {}) {
+    const params = new URLSearchParams({
+      kind,
+      limit: String(opts.limit || 24),
+      start: String(opts.start || 0),
+      category: opts.category || "",
+      format: opts.format || "",
+      label: opts.label || "",
+      region: opts.region || "",
+      year: opts.year || "",
+      platform: opts.platform || "",
+      sort: opts.sort || "",
+      proxyType: "auto",
+    });
+    const response = await this._fetch(`/api/douban/recommends?${params}`);
+    return response.json();
+  }
+
+  // Bangumi calendar API (anime "每日放送" — per-weekday anime list).
+  // Returns array of { weekday: {en}, items: [...] }.
+  async getBangumiCalendar() {
+    const response = await fetch("https://api.bgm.tv/calendar");
+    if (!response.ok) return [];
+    const data = await response.json();
+    return Array.isArray(data) ? data : [];
+  }
+
   // ── Search ──────────────────────────────────────────────────────────────
   // Verified shape: { results: SearchResult[] }, episodes is array of playable URLs.
 
