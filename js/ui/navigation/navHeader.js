@@ -28,8 +28,8 @@ export function renderNavHeader(activeTab = "") {
 export function handleNavAction(action) {
   const tab = NAV_TABS.find((t) => t.action === action);
   if (!tab) return false;
-  // Don't navigate if already on the target route.
-  if (Router.current === tab.route) return true;
+  // Always navigate — params may differ even when route is the same
+  // (e.g. nav-movie and nav-tv both go to "search" with different type).
   Router.navigate(tab.route, tab.params);
   return true;
 }
