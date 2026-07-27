@@ -9,13 +9,27 @@ import { LocalLibrary } from "../../../core/storage/localLibrary.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
 import { escapeHtml, formatTime } from "../../utils.js";
 
+// Home rows. `fetch` selects the API:
+//   douban     — /api/douban?type&tag  (movie/tv 热门 charts)
+//   recommends — /api/douban/recommends with sort=R (首播/上映时间) for 最新*
+//                 (tv tag=最新 on /api/douban returns empty on DecoTV)
+// Classic rows removed — those live under the category tabs.
 const ROWS = [
-  { type: "movie", tag: "热门", title: "热门电影" },
-  { type: "tv", tag: "热门", title: "热门剧集" },
-  { type: "movie", tag: "最新", title: "最新电影" },
-  { type: "tv", tag: "最新", title: "最新剧集" },
-  { type: "movie", tag: "经典", title: "经典电影" },
-  { type: "tv", tag: "经典", title: "经典剧集" }
+  { title: "热门电影", fetch: "douban", type: "movie", tag: "热门" },
+  { title: "热门剧集", fetch: "douban", type: "tv", tag: "热门" },
+  {
+    title: "最新电影",
+    fetch: "recommends",
+    kind: "movie",
+    sort: "R"
+  },
+  {
+    title: "最新剧集",
+    fetch: "recommends",
+    kind: "tv",
+    format: "电视剧",
+    sort: "R"
+  }
 ];
 
 const PAGE_SIZE = 24;
@@ -76,9 +90,8 @@ export const HomeScreen = {
     };
 
     const promises = ROWS.map((row, i) =>
-      api.getDoubanData(row.type, row.tag, PAGE_SIZE, 0)
-        .then((data) => {
-          const list = Array.isArray(data?.list) ? data.list : [];
+      this._fetchRow(row)
+        .then((list) => {
           this.rowsData[i] = { ...row, items: list };
           results[i] = { row, list, error: null };
         })
@@ -91,6 +104,22 @@ export const HomeScreen = {
 
     await Promise.all(promises);
     this.loading = false;
+  },
+
+  async _fetchRow(row) {
+    if (row.fetch === "recommends") {
+      const data = await api.getDoubanRecommends(row.kind, {
+        format: row.format || "",
+        category: row.category || "",
+        sort: row.sort || "R",
+        limit: PAGE_SIZE,
+        start: 0
+      });
+      return Array.isArray(data?.list) ? data.list : [];
+    }
+    // Default: classic /api/douban chart by type + tag.
+    const data = await api.getDoubanData(row.type, row.tag, PAGE_SIZE, 0);
+    return Array.isArray(data?.list) ? data.list : [];
   },
 
   // Render the "继续观看" row from play records. Returns the HTML string
@@ -140,11 +169,14 @@ export const HomeScreen = {
 
   _renderCard(item, rowIndex, idx) {
     const poster = api.getImageProxyUrl(item.poster);
+    // data-poster keeps the raw URL; detail will re-proxy. Avoid storing the
+    // already-proxied src (breaks when baseURL changes / double-encodes).
+    const rawPoster = item.poster || "";
     const title = escapeHtml(item.title || "");
     const rate = item.rate ? `<span class="rate-badge">★ ${escapeHtml(item.rate)}</span>` : "";
     const year = item.year ? escapeHtml(item.year) : "";
     return `
-      <div class="poster-card focusable" data-action="open-douban" data-title="${title}" data-poster="${escapeHtml(poster)}" data-row="${rowIndex}" data-col="${idx}">
+      <div class="poster-card focusable" data-action="open-douban" data-title="${title}" data-poster="${escapeHtml(rawPoster)}" data-row="${rowIndex}" data-col="${idx}">
         <img class="poster-img" src="${poster}" alt="" loading="lazy" onerror="this.style.opacity=0.1" />
         <div class="poster-meta">
           <div class="poster-title">${title}</div>
@@ -175,7 +207,12 @@ export const HomeScreen = {
         const key = focused.dataset.key;
         const rec = this.historyRecords?.find(([k]) => k === key)?.[1];
         if (!rec) return;
-        Router.navigate("detail", { title: rec.title, year: rec.year, autoPlay: true });
+        Router.navigate("detail", {
+          title: rec.title,
+          year: rec.year,
+          poster: rec.cover || "",
+          autoPlay: true
+        });
         return;
       }
       if (action === "nav-home") return;

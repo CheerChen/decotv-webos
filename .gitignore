@@ -9,3 +9,6 @@ node_modules/
 Thumbs.db
 *.swp
 *.swo
+
+# Local notes (not published)
+docs/

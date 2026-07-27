@@ -161,25 +161,46 @@
 
 .detail-hero .detail-desc {
   font-size: 20px;
-  line-height: 1.6;
+  line-height: 1.55;
   color: var(--text-color);
-  margin-bottom: 20px;
-  max-height: 200px;
-  overflow-y: auto;
+  margin-bottom: 16px;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .detail-hero .detail-cast {
   font-size: 17px;
   color: var(--text-dim);
-  margin-bottom: 24px;
+  margin-bottom: 12px;
   line-height: 1.5;
+}
+
+.detail-hero .detail-status {
+  font-size: 18px;
+  color: var(--accent);
+  margin-bottom: 16px;
+  line-height: 1.4;
+  min-height: 1.4em;
+}
+
+.detail-hero .detail-actions {
+  display: flex;
+  gap: 14px;
+  margin-top: 8px;
+  flex-wrap: wrap;
 }
 
 .episodes-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   gap: 12px;
-  margin-top: 16px;
+  margin: 8px 0 20px;
+  /* Keep episode strip compact so it does not push sources off-screen forever */
+  max-height: 220px;
+  overflow-y: auto;
+  padding-bottom: 4px;
 }
 
 .episode-item {
@@ -525,13 +546,33 @@
   color: var(--text-dim);
 }
 
-/* Settings list */
+/* Settings: actions left, read-only info right */
+
+.settings-layout {
+  display: flex;
+  gap: 48px;
+  align-items: flex-start;
+  max-width: 1600px;
+}
+
+.settings-col {
+  min-width: 0;
+}
+
+.settings-col-actions {
+  flex: 0 0 420px;
+}
+
+.settings-col-info {
+  flex: 1 1 auto;
+  max-width: 720px;
+}
 
 .settings-list {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-width: 800px;
+  margin-bottom: 12px;
 }
 
 .settings-item {
@@ -543,6 +584,11 @@
   align-items: center;
   cursor: pointer;
   transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.settings-item-readonly {
+  cursor: default;
+  opacity: 0.95;
 }
 
 .settings-item.focused {
@@ -557,6 +603,9 @@
 .settings-item .settings-value {
   font-size: 18px;
   color: var(--text-dim);
+  text-align: right;
+  max-width: 55%;
+  word-break: break-all;
 }
 
 /* Source list (detail screen) — ranked after probe */
@@ -635,6 +684,17 @@
   gap: 10px;
   flex-wrap: wrap;
   padding: 6px 0;
+}
+
+/* Library tabs sit above a dense poster grid — keep clear gap so chips
+   do not collide with the first card row. */
+#libraryTabs.chip-row {
+  margin: 4px 0 28px;
+  padding: 10px 0 8px;
+}
+
+#libraryBody .poster-grid {
+  padding-top: 4px;
 }
 
 /* Year filter row: no wrap, horizontal scroll to save vertical space. */

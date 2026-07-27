@@ -27,12 +27,29 @@ export const ScreenUtils = {
     container.innerHTML = "";
   },
 
-  setInitialFocus(container, selector = ".focusable") {
-    const first = container?.querySelector(selector);
+  // Accept either a container (search descendants) or the focusable node itself.
+  // Always clear other .focused nodes in the same .screen so querySelector
+  // (".focused") cannot stick on a tab chip while a card also looks focused.
+  setInitialFocus(targetOrRoot, selector = ".focusable") {
+    if (!targetOrRoot) return;
+    let first = null;
+    try {
+      if (typeof targetOrRoot.matches === "function" && targetOrRoot.matches(selector)) {
+        first = targetOrRoot;
+      }
+    } catch (_) { /* invalid selector — fall through to query */ }
+    if (!first) first = targetOrRoot.querySelector?.(selector) || null;
     if (!first) return;
-    container?.querySelectorAll(`${selector}.focused`).forEach((n) => n.classList.remove("focused"));
+
+    const scope = first.closest?.(".screen") || targetOrRoot.closest?.(".screen") || targetOrRoot;
+    scope.querySelectorAll?.(".focused").forEach((n) => n.classList.remove("focused"));
+    // Defensive: also clear on the root if scope was a nested fragment.
+    if (scope !== targetOrRoot) {
+      targetOrRoot.querySelectorAll?.(".focused").forEach((n) => n.classList.remove("focused"));
+    }
+
     first.classList.add("focused");
-    first.focus();
+    first.focus?.();
   },
 
   moveFocusDirectional(container, direction, selector = ".focusable") {
@@ -43,17 +60,22 @@ export const ScreenUtils = {
       });
     if (!list.length) return;
 
-    const current = container?.querySelector(`${selector}.focused`) || list[0];
-    if (!current.classList.contains("focused")) {
+    // Prefer the focused node that is still in the visible list. If several
+    // nodes still carry .focused (stale), pick the last one in list order so a
+    // content card wins over an earlier header/tab chip.
+    const focusedInList = list.filter((n) => n.classList.contains("focused"));
+    const current = focusedInList.length ? focusedInList[focusedInList.length - 1] : list[0];
+    if (focusedInList.length !== 1) {
       list.forEach((node) => node.classList.remove("focused"));
       current.classList.add("focused");
-      current.focus();
-      return;
+      current.focus?.();
+      if (focusedInList.length === 0) return; // just established focus; wait for next key
     }
 
     const currentRect = current.getBoundingClientRect();
     const cx = currentRect.left + currentRect.width / 2;
     const cy = currentRect.top + currentRect.height / 2;
+    const horizontal = direction === "left" || direction === "right";
 
     const candidates = list
       .filter((node) => node !== current)
@@ -71,15 +93,21 @@ export const ScreenUtils = {
         return false;
       })
       .map((entry) => {
-        const primary = (direction === "up" || direction === "down")
-          ? Math.abs(entry.dy) : Math.abs(entry.dx);
-        const secondary = (direction === "up" || direction === "down")
-          ? Math.abs(entry.dx) : Math.abs(entry.dy);
-        const axisTolerance = (direction === "up" || direction === "down")
-          ? Math.max(currentRect.width * 0.7, entry.rect.width * 0.7, 48)
-          : Math.max(currentRect.height * 0.7, entry.rect.height * 0.7, 48);
+        const primary = horizontal ? Math.abs(entry.dx) : Math.abs(entry.dy);
+        const secondary = horizontal ? Math.abs(entry.dy) : Math.abs(entry.dx);
+        // Horizontal: tight vertical band so a short chip above a poster grid
+        // cannot steal left/right moves between cards (old 0.7*cardHeight was
+        // ~250px and treated the tab row as "aligned").
+        // Vertical: keep a generous width band for irregular poster rows.
+        const axisTolerance = horizontal
+          ? Math.max(Math.min(currentRect.height, entry.rect.height) * 0.45, 36)
+          : Math.max(currentRect.width * 0.7, entry.rect.width * 0.7, 48);
         const aligned = secondary <= axisTolerance;
-        return { ...entry, aligned, score: primary * 1000 + secondary };
+        // Heavy penalty for off-axis candidates so fallback rarely jumps rows.
+        const score = aligned
+          ? primary * 1000 + secondary
+          : primary * 1000 + secondary + 1_000_000;
+        return { ...entry, aligned, score };
       });
 
     const aligned = candidates.filter((e) => e.aligned).sort((a, b) => a.score - b.score);
@@ -87,9 +115,9 @@ export const ScreenUtils = {
     const target = aligned[0]?.node || sorted[0]?.node || null;
     if (!target) return;
 
-    current.classList.remove("focused");
+    list.forEach((node) => node.classList.remove("focused"));
     target.classList.add("focused");
-    target.focus();
+    target.focus?.();
     target.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: "smooth" });
   },
 

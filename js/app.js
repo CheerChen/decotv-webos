@@ -34,6 +34,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   LocalLibrary.migrateRecordsIfNeeded();
   Router.init();
   FocusEngine.init(Router);
+  // CDP live-debug / screenshot helpers (window is file:// origin on device).
+  window.__router = Router;
+  window.__focusEngine = FocusEngine;
 
   // Global 401 handler — silently re-establish the session (real creds if we
   // have them, else anonymous). Does NOT navigate: a personal-endpoint 401 while

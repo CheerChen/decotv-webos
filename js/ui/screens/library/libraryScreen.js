@@ -21,9 +21,9 @@ export const LibraryScreen = {
     this.container.innerHTML = `
       ${renderNavHeader("nav-library")}
       <div class="content-scroll" id="libraryScroll">
-        <div style="display:flex;gap:14px;margin-bottom:20px;">
-          <button class="btn focusable active" data-action="tab-favorites" id="tabFav">收藏</button>
-          <button class="btn ghost focusable" data-action="tab-records" id="tabRec">播放记录</button>
+        <div class="chip-row" id="libraryTabs">
+          <button class="btn chip focusable active" data-action="tab-favorites" id="tabFav">收藏</button>
+          <button class="btn chip focusable" data-action="tab-records" id="tabRec">播放记录</button>
         </div>
         <div id="libraryBody"><div class="center-wrap"><div class="loading-spinner"></div></div></div>
       </div>
@@ -36,8 +36,10 @@ export const LibraryScreen = {
 
   async _loadTab(tab) {
     this.tab = tab;
-    this.container.querySelector("#tabFav")?.classList.toggle("active", tab === "favorites");
-    this.container.querySelector("#tabRec")?.classList.toggle("active", tab === "records");
+    const fav = this.container.querySelector("#tabFav");
+    const rec = this.container.querySelector("#tabRec");
+    fav?.classList.toggle("active", tab === "favorites");
+    rec?.classList.toggle("active", tab === "records");
     // Favorites & play records are stored on-device (see localLibrary.js).
     if (tab === "favorites") {
       const data = LocalLibrary.getFavorites();
@@ -122,14 +124,24 @@ export const LibraryScreen = {
         const fav = this.favorites[key];
         if (!fav) return;
         // Go to detail in prefer mode: re-search all sources + probe + pick best.
-        Router.navigate("detail", { title: fav.search_title || fav.title, year: fav.year, autoPlay: true });
+        Router.navigate("detail", {
+          title: fav.search_title || fav.title,
+          year: fav.year,
+          poster: fav.cover || "",
+          autoPlay: true
+        });
         return;
       }
       if (action === "open-rec") {
         const key = focused.dataset.key;
         const rec = this.records[key];
         if (!rec) return;
-        Router.navigate("detail", { title: rec.title, year: rec.year, autoPlay: true });
+        Router.navigate("detail", {
+          title: rec.title,
+          year: rec.year,
+          poster: rec.cover || "",
+          autoPlay: true
+        });
         return;
       }
       if (handleNavAction(action)) return;

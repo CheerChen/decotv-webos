@@ -113,10 +113,12 @@ export const DetailScreen = {
     }
 
     this._renderSkeleton();
+    this._renderHeroMeta(); // year from entry params; enriched as sources/detail arrive
     ScreenUtils.show(this.container);
 
     if (this.mode === "single") {
       // Already have a source; optionally fetch detail for richer metadata.
+      this._renderHeroMeta();
       this._maybeFetchDetail();
       if (this.autoPlay) {
         await this._startPlayback(this.currentSource, 0, { preferResume: true });
@@ -167,6 +169,7 @@ export const DetailScreen = {
     this.currentSource = this.sources.find(
       (s) => getSourceProbeKey(s) === preferCache.currentSourceKey
     ) || this.sources[0];
+    this._renderHeroMeta();
     this._maybeFetchDetail();
     this._renderSourceList();
     this._renderEpisodes();
@@ -183,37 +186,116 @@ export const DetailScreen = {
   _renderSkeleton() {
     const poster = api.getImageProxyUrl(this.poster);
     const title = escapeHtml(this.title);
+    // Episodes sit above the (often long) source list so they stay reachable
+    // without scrolling past every probe row. Prefer-status stays in the hero.
     this.container.innerHTML = `
       ${renderNavHeader()}
       <div class="content-scroll" id="detailScroll">
         <div class="detail-hero">
-          <img class="detail-poster" src="${poster}" alt="" onerror="this.style.opacity=0.1" />
+          <img class="detail-poster" id="detailPoster" src="${poster || ""}" alt="" onerror="this.style.opacity=0.15" />
           <div class="detail-info">
             <h1 class="detail-title">${title}</h1>
             <div class="detail-tags" id="detailTags"></div>
             <div class="detail-desc" id="detailDesc"></div>
             <div class="detail-cast" id="detailCast"></div>
-            <div id="detailStatus" class="detail-cast" style="color:var(--accent)">准备中…</div>
-            <div style="display:flex;gap:14px;margin-top:18px;flex-wrap:wrap;" id="detailActions">
+            <div id="detailStatus" class="detail-status">准备中…</div>
+            <div class="detail-actions" id="detailActions">
               <button class="btn primary focusable" data-action="play" disabled>播放</button>
               <button class="btn focusable" data-action="favorite">收藏</button>
               <button class="btn ghost focusable" data-action="refresh">重新测速</button>
               <button class="btn ghost focusable" data-action="back">返回</button>
             </div>
+          </div>
         </div>
-        </div>
-        <div class="section-title">播放源（测速后按质量排序）</div>
-        <div id="sourceList"><div class="empty-state">正在搜索播放源…</div></div>
         <div class="section-title" id="episodesTitle" style="display:none;">剧集列表</div>
         <div class="episodes-list" id="episodesList" style="display:none;"></div>
+        <div class="section-title">播放源（测速后按质量排序）</div>
+        <div id="sourceList"><div class="empty-state">正在搜索播放源…</div></div>
       </div>
     `;
     bindNavClicks(this.container);
   },
 
+  // Update hero poster when a better cover arrives (history entry without
+  // poster, search result, or /api/detail). Keeps this.poster in sync.
+  _setPoster(url) {
+    if (!url || url === this.poster) return;
+    this.poster = url;
+    const img = this.container?.querySelector("#detailPoster");
+    if (!img) return;
+    const src = api.getImageProxyUrl(url);
+    if (!src) return;
+    img.style.opacity = "1";
+    img.src = src;
+  },
+
   _setStatus(text) {
     const el = this.container?.querySelector("#detailStatus");
     if (el) el.textContent = text;
+  },
+
+  // Fill hero tags / synopsis / cast from whatever we have so far.
+  // Search hits usually carry year, type_name, desc, remarks; /api/detail is
+  // best-effort and often sparse on this server — do not wait on it alone.
+  _renderHeroMeta() {
+    if (!this.container) return;
+    const src = this.currentSource || null;
+    const detail = this.detail || null;
+
+    const year = String(detail?.year || src?.year || this.year || "").trim();
+    const typeLabel = String(
+      detail?.type_name
+      || src?.type_name
+      || (detail?.type === "tv" ? "剧集" : detail?.type === "movie" ? "电影" : "")
+      || ""
+    ).trim();
+    const epCount = Array.isArray(detail?.episodes)
+      ? detail.episodes.length
+      : Array.isArray(src?.episodes)
+        ? src.episodes.length
+        : 0;
+    const quality = String(src?.quality_tag || detail?.resolution || "").trim();
+    const className = String(detail?.class || src?.class || "").trim();
+
+    const tags = this.container.querySelector("#detailTags");
+    if (tags) {
+      const parts = [
+        year,
+        typeLabel,
+        className && className !== typeLabel ? className : "",
+        epCount > 1 ? `${epCount} 集` : "",
+        quality
+      ].filter(Boolean);
+      // Deduplicate while keeping order (e.g. type_name and "电影" both present).
+      const seen = new Set();
+      const uniq = [];
+      for (const p of parts) {
+        if (seen.has(p)) continue;
+        seen.add(p);
+        uniq.push(p);
+      }
+      tags.innerHTML = uniq.map((x) => `<span>${escapeHtml(x)}</span>`).join("");
+    }
+
+    const desc = this.container.querySelector("#detailDesc");
+    if (desc) {
+      const text = String(detail?.desc || src?.desc || "").trim();
+      desc.textContent = text;
+      desc.style.display = text ? "" : "none";
+    }
+
+    const cast = this.container.querySelector("#detailCast");
+    if (cast) {
+      const lines = [];
+      const director = detail?.director || src?.director;
+      const actor = detail?.actor || src?.actor;
+      const remarks = detail?.remarks || src?.remarks;
+      if (director) lines.push(`导演：${escapeHtml(String(director))}`);
+      if (actor) lines.push(`主演：${escapeHtml(String(actor))}`);
+      if (remarks) lines.push(escapeHtml(String(remarks)));
+      cast.innerHTML = lines.join("<br>");
+      cast.style.display = lines.length ? "" : "none";
+    }
   },
 
   async _searchAndPrefer() {
@@ -243,6 +325,16 @@ export const DetailScreen = {
         this.container.querySelector("#sourceList").innerHTML = `<div class="empty-state">没有「${escapeHtml(this.title)}」的可用源</div>`;
         return;
       }
+      // Fill missing cover + hero meta from the first search hit that has data.
+      if (!this.poster) {
+        const withPoster = this.sources.find((s) => s.poster);
+        if (withPoster?.poster) this._setPoster(withPoster.poster);
+      }
+      if (!this.currentSource && this.sources[0]) {
+        // Tentative source for meta only; probe will reassign the real pick.
+        this.currentSource = this.sources[0];
+      }
+      this._renderHeroMeta();
       this._renderSourceList();
       await this._probeAndPick();
     } catch (e) {
@@ -364,8 +456,11 @@ export const DetailScreen = {
       best = this.sources[0];
     }
     this.currentSource = best;
+    if (best?.poster) this._setPoster(best.poster);
+    this._renderHeroMeta();
     this._renderSourceList();
     this._renderEpisodes();
+    this._maybeFetchDetail();
     this._setStatus(`✨ 已选「${escapeHtml(best.source_name || best.source)}」，准备播放`);
     // Enable the play button and focus it.
     const playBtn = this.container.querySelector('.btn[data-action="play"]');
@@ -453,24 +548,15 @@ export const DetailScreen = {
     try {
       const detail = await api.getVideoDetail(this.currentSource.source, String(this.currentSource.id));
       this.detail = detail;
-      const cast = this.container.querySelector("#detailCast");
-      if (cast) {
-        const parts = [];
-        if (detail.director) parts.push(`导演：${escapeHtml(detail.director)}`);
-        if (detail.actor) parts.push(`主演：${escapeHtml(detail.actor)}`);
-        if (detail.remarks) parts.push(escapeHtml(detail.remarks));
-        cast.innerHTML = parts.join("<br>") || "—";
+      // Prefer detail/source poster when the hero still has none (common when
+      // entering from continue-watching without a cover field on the record).
+      // Skip known placeholder logos that some sites return as "poster".
+      const cover = detail.poster || detail.cover || this.currentSource.poster;
+      if (cover && !/\/logo\.(jpg|png|webp)/i.test(cover) && !/static\/images\/logo/i.test(cover)) {
+        this._setPoster(cover);
       }
-      const desc = this.container.querySelector("#detailDesc");
-      if (desc && detail.desc) desc.textContent = detail.desc;
-      const tags = this.container.querySelector("#detailTags");
-      if (tags) {
-        const year = escapeHtml(detail.year || this.year || "");
-        const t = ["movie", "tv"].includes(detail.type) ? (detail.type === "tv" ? "剧集" : "电影") : "";
-        const ep = Array.isArray(detail.episodes) ? `${detail.episodes.length} 集` : "";
-        tags.innerHTML = [year, t, ep].filter(Boolean).map((x) => `<span>${x}</span>`).join("");
-      }
-    } catch (e) { /* best-effort */ }
+      this._renderHeroMeta();
+    } catch (e) { /* best-effort — search-hit meta already shown */ }
   },
 
   async _startPlayback(source, episodeIndex, opts = {}) {
@@ -555,6 +641,9 @@ export const DetailScreen = {
         if (!src) return;
         this.currentSource = src;
         this.episodeIndex = 0;
+        this.detail = null;
+        if (src.poster) this._setPoster(src.poster);
+        this._renderHeroMeta();
         this._renderSourceList();
         this._renderEpisodes();
         this._setStatus(`已切换到「${escapeHtml(src.source_name || src.source)}」`);
