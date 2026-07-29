@@ -15,6 +15,7 @@ import { ScreenUtils } from "../../navigation/screen.js";
 import { Router } from "../../navigation/router.js";
 import { api } from "../../../core/network/decotvClient.js";
 import { LocalLibrary } from "../../../core/storage/localLibrary.js";
+import { LibrarySync } from "../../../core/storage/librarySync.js";
 import { showToast } from "../../toast.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
 import { escapeHtml } from "../../utils.js";
@@ -730,22 +731,25 @@ export const DetailScreen = {
   _toggleFavorite() {
     const r = this.currentSource;
     if (!r) { showToast("尚未选定源"); return; }
-    // Favorites are stored on-device (see localLibrary.js). Key uses the
-    // DecoTV `${source}+${id}` convention.
+    // Key uses the DecoTV `${source}+${id}` convention, which is also what the
+    // server expects, so favorites mirror across without translation.
     const key = `${r.source}+${r.id}`;
     if (LocalLibrary.isFavorited(key)) {
       LocalLibrary.deleteFavorite(key);
+      LibrarySync.removeFavorite(key);
       showToast("已取消收藏");
       return;
     }
-    LocalLibrary.addFavorite(key, {
+    const favorite = {
       cover: r.poster || this.poster,
       title: r.title || this.title,
       source_name: r.source_name || r.source,
       total_episodes: Array.isArray(r.episodes) ? r.episodes.length : 0,
       search_title: r.title || this.title,
       year: r.year || this.year || ""
-    });
+    };
+    LocalLibrary.addFavorite(key, favorite);
+    LibrarySync.pushFavorite(key, favorite);
     showToast("已收藏");
   },
 

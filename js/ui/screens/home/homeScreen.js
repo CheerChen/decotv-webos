@@ -58,18 +58,15 @@ export const HomeScreen = {
   async _loadRows() {
     const scroll = this.container.querySelector("#homeScroll");
 
-    // Build the "继续观看" row from device-local play records (mirrors PC
-    // home's first row). Sorted by save_time descending; only shown when
-    // there is at least one record. Renders synchronously from localStorage
-    // so it appears before the async Douban rows.
-    const records = this._renderHistoryRow();
-
     // Fetch all Douban rows in parallel; render incrementally as each arrives.
     const results = new Array(ROWS.length).fill(null);
     let firstRendered = false;
 
     const renderReady = () => {
-      let html = records;
+      // The "继续观看" row (mirrors PC home's first row) is rebuilt on every
+      // pass rather than captured once, so a library pull landing mid-load is
+      // picked up for free. It is a localStorage read, sorted and sliced.
+      let html = this._renderHistoryRow();
       for (let i = 0; i < results.length; i++) {
         const r = results[i];
         if (!r) break;
@@ -88,6 +85,10 @@ export const HomeScreen = {
         if (first) { ScreenUtils.setInitialFocus(first); firstRendered = true; }
       }
     };
+    // Exposed so a library pull that lands after loading finished can still
+    // refresh the history row. firstRendered has been set by then, so this
+    // cannot yank focus back to the first card.
+    this._renderReady = renderReady;
 
     const promises = ROWS.map((row, i) =>
       this._fetchRow(row)
@@ -120,6 +121,24 @@ export const HomeScreen = {
     // Default: classic /api/douban chart by type + tag.
     const data = await api.getDoubanData(row.type, row.tag, PAGE_SIZE, 0);
     return Array.isArray(data?.list) ? data.list : [];
+  },
+
+  // Called by librarySync once a pull has changed the local store. Re-running
+  // the render replaces #homeScroll wholesale, which destroys the .focused
+  // node, so the cursor is pinned to the same card by identity rather than by
+  // position — the history row can gain or lose entries in the same pass.
+  refreshLibraryData() {
+    const scroll = this.container?.querySelector("#homeScroll");
+    if (!scroll || !this._renderReady) return;
+    const markerOf = (node) => (node
+      ? `${node.dataset.action || ""}|${node.dataset.key || ""}|${node.dataset.col || ""}`
+      : "");
+    const marker = markerOf(scroll.querySelector(".focused"));
+    this._renderReady();
+    if (!marker) return;
+    const restored = Array.from(scroll.querySelectorAll(".focusable"))
+      .find((node) => markerOf(node) === marker);
+    if (restored) ScreenUtils.setInitialFocus(restored);
   },
 
   // Render the "继续观看" row from play records. Returns the HTML string

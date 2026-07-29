@@ -5,6 +5,7 @@ import { FocusEngine } from "./ui/navigation/focusEngine.js";
 import { AuthManager, AuthState } from "./core/auth/authManager.js";
 import { api } from "./core/network/decotvClient.js";
 import { LocalLibrary, SCHEMA_VERSION } from "./core/storage/localLibrary.js";
+import { LibrarySync } from "./core/storage/librarySync.js";
 import { t, applyDocumentLang } from "./core/i18n.js";
 
 import { SplashScreen } from "./ui/screens/splash/splashScreen.js";
@@ -49,6 +50,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     AuthManager.ensureSession();
   });
 
+  // Library mirroring is tied to having a real account: anonymous browsing on a
+  // public server has no server-side library to sync with, and every call would
+  // 401. isLoggedIn is passed as a callback rather than imported inside
+  // librarySync so that module stays free of auth state and unit-testable.
+  LibrarySync.configure({
+    api,
+    isEnabled: () => AuthManager.isLoggedIn(),
+    onPulled: () => Router.getCurrentScreen()?.refreshLibraryData?.()
+  });
+
   AuthManager.subscribe((state, extra) => {
     switch (state) {
       case AuthState.LOADING:
@@ -62,6 +73,11 @@ document.addEventListener("DOMContentLoaded", async () => {
         break;
       case AuthState.AUTHENTICATED:
         Router.navigate("home", {}, { replaceHistory: true });
+        // Not awaited: home renders its "continue watching" row from the local
+        // store straight away and refreshes it if the pull changes anything.
+        // Blocking the first paint on two API calls to save a re-render would
+        // be a poor trade.
+        LibrarySync.pull();
         break;
       case AuthState.ERROR:
         Router.navigate("server", { error: extra?.error || t("app.unknownError") }, { replaceHistory: true });

@@ -4,6 +4,7 @@ import { ScreenUtils } from "../../navigation/screen.js";
 import { Router } from "../../navigation/router.js";
 import { api } from "../../../core/network/decotvClient.js";
 import { LocalLibrary } from "../../../core/storage/localLibrary.js";
+import { LibrarySync } from "../../../core/storage/librarySync.js";
 import { showToast } from "../../toast.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
 import { escapeHtml } from "../../utils.js";
@@ -32,6 +33,24 @@ export const LibraryScreen = {
     ScreenUtils.setInitialFocus(this.container.querySelector("#tabFav"));
     bindNavClicks(this.container);
     await this._loadTab("favorites");
+    // Render from the local store first, then reconcile. This is the screen
+    // most likely to be looked at right after something changed on another
+    // client, and it is cheap to re-check on entry. Not awaited, so an
+    // unreachable server cannot hold the screen empty.
+    LibrarySync.pull();
+  },
+
+  // Called by librarySync after a pull changed the local store. _loadTab
+  // re-renders the body and would otherwise send the cursor back to the first
+  // card while the user is halfway down the grid.
+  refreshLibraryData() {
+    const body = this.container?.querySelector("#libraryBody");
+    if (!body) return;
+    const key = body.querySelector(".focused")?.dataset.key || "";
+    this._loadTab(this.tab);
+    if (!key) return;
+    const restored = body.querySelector(`.focusable[data-key="${CSS.escape(key)}"]`);
+    if (restored) ScreenUtils.setInitialFocus(restored);
   },
 
   async _loadTab(tab) {

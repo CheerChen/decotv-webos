@@ -5,6 +5,7 @@ import { ScreenUtils } from "../../navigation/screen.js";
 import { Router } from "../../navigation/router.js";
 import { api } from "../../../core/network/decotvClient.js";
 import { LocalLibrary } from "../../../core/storage/localLibrary.js";
+import { LibrarySync } from "../../../core/storage/librarySync.js";
 import { showToast } from "../../toast.js";
 import { escapeHtml, escapeAttr, formatTime } from "../../utils.js";
 
@@ -398,16 +399,23 @@ export const PlayerScreen = {
     // always resumes by title regardless of which source was used.
     const key = LocalLibrary.recordKeyForTitle(m.title, m.year);
     // index is 1-based (episode number), matching the DecoTV record convention.
-    LocalLibrary.savePlayRecord(key, {
+    // source/id are stored alongside even though the local key does not use
+    // them: the server keys records per source, so without them a record can
+    // never be mirrored (see librarySync.js).
+    const record = {
       title: m.title,
       cover: m.cover || "",
       source_name: m.source_name || m.source,
+      source: m.source || "",
+      id: m.id || "",
       year: m.year || "",
       index: this.index + 1,
       total_episodes: m.total_episodes || this.episodes.length,
       play_time: cur,
       total_time: dur
-    });
+    };
+    LocalLibrary.savePlayRecord(key, record);
+    LibrarySync.pushRecord({ ...record, save_time: Date.now() });
   },
 
   _handleEnded() {
