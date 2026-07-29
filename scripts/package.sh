@@ -10,10 +10,16 @@
 # Staging the shipped files explicitly is both smaller and unambiguous about
 # what reaches the TV. Keep this list in sync with the runtime references in
 # index.html (css/, js/, webOSTVjs-*/) and appinfo.json (icons, splash).
+#
+# The JS service is a second top-level argument rather than part of the staged
+# app directory. ares-package treats an app and a service as separate inputs
+# and lays them out under different prefixes in the IPK; copying the service
+# into the app tree instead just ships dead files the bus never sees.
 set -euo pipefail
 
 APP_ID="com.cheerchen.decotv"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SERVICE="$ROOT/service/${APP_ID}.service"
 STAGE="$(mktemp -d)/${APP_ID}"
 trap 'rm -rf "$(dirname "$STAGE")"' EXIT
 
@@ -27,7 +33,7 @@ find "$STAGE" -name ".DS_Store" -delete
 
 # -n skips minification: the sources are plain unminified ES modules and the
 # bundled minifier breaks them.
-ares-package "$STAGE" -n -o "$ROOT"
+ares-package "$STAGE" "$SERVICE" -n -o "$ROOT"
 
 VERSION="$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' appinfo.json | head -1)"
 IPK="$ROOT/${APP_ID}_${VERSION}_all.ipk"
