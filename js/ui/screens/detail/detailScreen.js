@@ -19,6 +19,7 @@ import { LibrarySync } from "../../../core/storage/librarySync.js";
 import { showToast } from "../../toast.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
 import { escapeHtml } from "../../utils.js";
+import { posterAttrs, hydratePosters } from "../../posterImage.js";
 import {
   comparePlaybackMetrics,
   getQualityRank,
@@ -211,7 +212,7 @@ export const DetailScreen = {
   },
 
   _renderSkeleton() {
-    const poster = api.getImageProxyUrl(this.poster);
+    const poster = posterAttrs(this.poster);
     const title = escapeHtml(this.title);
     // Episodes sit above the (often long) source list so they stay reachable
     // without scrolling past every probe row. Prefer-status stays in the hero.
@@ -219,7 +220,7 @@ export const DetailScreen = {
       ${renderNavHeader()}
       <div class="content-scroll" id="detailScroll">
         <div class="detail-hero">
-          <img class="detail-poster" id="detailPoster" src="${poster || ""}" alt="" onerror="this.style.opacity=0.15" />
+          <img class="detail-poster" id="detailPoster" ${poster} alt="" onerror="this.style.opacity=0.15" />
           <div class="detail-info">
             <h1 class="detail-title">${title}</h1>
             <div class="detail-tags" id="detailTags"></div>
@@ -249,11 +250,12 @@ export const DetailScreen = {
     if (!url || url === this.poster) return;
     this.poster = url;
     const img = this.container?.querySelector("#detailPoster");
-    if (!img) return;
-    const src = api.getImageProxyUrl(url);
-    if (!src) return;
+    if (!img || !url) return;
     img.style.opacity = "1";
-    img.src = src;
+    // Hand it back to the same path the templates use, so the fetch goes
+    // through the service rather than being attempted by the webview.
+    img.dataset.poster = url;
+    hydratePosters(this.container);
   },
 
   _setStatus(text) {

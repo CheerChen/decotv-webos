@@ -15,6 +15,7 @@ import { ScreenUtils } from "../../navigation/screen.js";
 import { Router } from "../../navigation/router.js";
 import { api } from "../../../core/network/decotvClient.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
+import { posterAttrs } from "../../posterImage.js";
 import { escapeHtml } from "../../utils.js";
 
 const PAGE_SIZE = 24;
@@ -506,14 +507,14 @@ export const SearchScreen = {
       return;
     }
     const cards = this.results.slice(0, 120).map((r, i) => {
-      const poster = api.getImageProxyUrl(r.poster);
+      const poster = posterAttrs(r.poster);
       const title = escapeHtml(r.title || r.name_cn || r.name || "");
       const year = escapeHtml(r.year || "");
       const rate = r.rate ? `<span class="rate-badge">★ ${escapeHtml(r.rate)}</span>` : "";
       const sub = `${rate}${year ? `<span>${year}</span>` : ""}`;
       return `
         <div class="poster-card focusable" data-action="open-douban" data-index="${i}">
-          <img class="poster-img" src="${poster}" alt="" loading="lazy" onerror="this.style.opacity=0.1" />
+          <img class="poster-img" ${poster} alt="" loading="lazy" onerror="this.style.opacity=0.1" />
           <div class="poster-meta">
             <div class="poster-title">${title}</div>
             <div class="poster-sub">${sub}</div>

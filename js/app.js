@@ -7,6 +7,7 @@ import { api } from "./core/network/decotvClient.js";
 import { LocalLibrary, SCHEMA_VERSION } from "./core/storage/localLibrary.js";
 import { LibrarySync } from "./core/storage/librarySync.js";
 import { t, applyDocumentLang } from "./core/i18n.js";
+import { watchPosters } from "./ui/posterImage.js";
 
 import { SplashScreen } from "./ui/screens/splash/splashScreen.js";
 import { ServerScreen } from "./ui/screens/server/serverScreen.js";
@@ -39,6 +40,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   LocalLibrary.migrateRecordsIfNeeded();
   Router.init();
   FocusEngine.init(Router);
+  // Posters are fetched by the JS service and swapped in as they arrive; see
+  // posterImage.js for why the webview cannot load them itself.
+  watchPosters();
   // CDP live-debug / screenshot helpers (window is file:// origin on device).
   window.__router = Router;
   window.__focusEngine = FocusEngine;

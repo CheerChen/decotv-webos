@@ -103,6 +103,17 @@ export async function lunaFetch(baseUrl, path, options = {}) {
   return new LunaResponse(result);
 }
 
+// Poster bytes, fetched by the service straight from the image host. Base64
+// because Luna carries JSON, and because the service is jailed away from any
+// directory the webview is allowed to read from disk.
+export async function lunaFetchImage(url) {
+  const result = await serviceCall("fetchImage", { url }, { timeoutMs: 20000 });
+  if (!result?.returnValue || !result.base64) {
+    throw new Error(result?.error || "IMAGE_FETCH_FAILED");
+  }
+  return { base64: result.base64, contentType: result.contentType || "image/jpeg" };
+}
+
 export async function getLunaSession(baseUrl) {
   if (!hasLunaTransport()) return { available: false, hasSession: false };
   const result = await serviceCall("diagnostics", { baseUrl });

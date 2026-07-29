@@ -7,6 +7,7 @@ import { LocalLibrary } from "../../../core/storage/localLibrary.js";
 import { LibrarySync } from "../../../core/storage/librarySync.js";
 import { showToast } from "../../toast.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
+import { posterAttrs } from "../../posterImage.js";
 import { escapeHtml } from "../../utils.js";
 
 export const LibraryScreen = {
@@ -79,7 +80,7 @@ export const LibraryScreen = {
       return;
     }
     const cards = entries.map(([key, fav], i) => {
-      const poster = api.getImageProxyUrl(fav.cover);
+      const poster = posterAttrs(fav.cover);
       const title = escapeHtml(fav.title || "");
       const sourceName = escapeHtml(fav.source_name || "");
       const year = escapeHtml(fav.year || "");
@@ -87,7 +88,7 @@ export const LibraryScreen = {
       const sub = [year, total, `<span class="source-pill">${sourceName}</span>`].filter(Boolean).join(" ");
       return `
         <div class="poster-card focusable" data-action="open-fav" data-key="${escapeHtml(key)}" data-index="${i}">
-          <img class="poster-img" src="${poster}" alt="" loading="lazy" onerror="this.style.opacity=0.1" />
+          <img class="poster-img" ${poster} alt="" loading="lazy" onerror="this.style.opacity=0.1" />
           <div class="poster-meta">
             <div class="poster-title">${title}</div>
             <div class="poster-sub">${sub}</div>
@@ -108,7 +109,7 @@ export const LibraryScreen = {
       return;
     }
     const cards = entries.map(([key, rec], i) => {
-      const poster = api.getImageProxyUrl(rec.cover);
+      const poster = posterAttrs(rec.cover);
       const title = escapeHtml(rec.title || "");
       const sourceName = escapeHtml(rec.source_name || "");
       const year = escapeHtml(rec.year || "");
@@ -116,7 +117,7 @@ export const LibraryScreen = {
       const sub = [year, idx, `<span class="source-pill">${sourceName}</span>`].filter(Boolean).join(" ");
       return `
         <div class="poster-card focusable" data-action="open-rec" data-key="${escapeHtml(key)}" data-index="${i}">
-          <img class="poster-img" src="${poster}" alt="" loading="lazy" onerror="this.style.opacity=0.1" />
+          <img class="poster-img" ${poster} alt="" loading="lazy" onerror="this.style.opacity=0.1" />
           <div class="poster-meta">
             <div class="poster-title">${title}</div>
             <div class="poster-sub">${sub}</div>

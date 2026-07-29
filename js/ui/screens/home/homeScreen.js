@@ -7,6 +7,7 @@ import { api } from "../../../core/network/decotvClient.js";
 import { showToast } from "../../toast.js";
 import { LocalLibrary } from "../../../core/storage/localLibrary.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
+import { posterAttrs } from "../../posterImage.js";
 import { escapeHtml, formatTime } from "../../utils.js";
 
 // Home rows. `fetch` selects the API:
@@ -152,7 +153,7 @@ export const HomeScreen = {
     if (!entries.length) return "";
     this.historyRecords = entries;
     const cards = entries.map(([key, rec], idx) => {
-      const poster = api.getImageProxyUrl(rec.cover);
+      const poster = posterAttrs(rec.cover);
       const title = escapeHtml(rec.title || "");
       const ep = rec.total_episodes > 1 && rec.index ? `看到第 ${rec.index} 集` : "";
       const progress = rec.total_time > 0
@@ -161,7 +162,7 @@ export const HomeScreen = {
       const sub = [ep, progress].filter(Boolean).join(" · ");
       return `
         <div class="poster-card focusable" data-action="open-rec" data-key="${escapeHtml(key)}" data-col="${idx}">
-          <img class="poster-img" src="${poster}" alt="" loading="lazy" onerror="this.style.opacity=0.1" />
+          <img class="poster-img" ${poster} alt="" loading="lazy" onerror="this.style.opacity=0.1" />
           <div class="poster-meta">
             <div class="poster-title">${title}</div>
             <div class="poster-sub">${sub}</div>
@@ -187,7 +188,7 @@ export const HomeScreen = {
   },
 
   _renderCard(item, rowIndex, idx) {
-    const poster = api.getImageProxyUrl(item.poster);
+    const poster = posterAttrs(item.poster);
     // data-poster keeps the raw URL; detail will re-proxy. Avoid storing the
     // already-proxied src (breaks when baseURL changes / double-encodes).
     const rawPoster = item.poster || "";
@@ -196,7 +197,7 @@ export const HomeScreen = {
     const year = item.year ? escapeHtml(item.year) : "";
     return `
       <div class="poster-card focusable" data-action="open-douban" data-title="${title}" data-poster="${escapeHtml(rawPoster)}" data-row="${rowIndex}" data-col="${idx}">
-        <img class="poster-img" src="${poster}" alt="" loading="lazy" onerror="this.style.opacity=0.1" />
+        <img class="poster-img" ${poster} alt="" loading="lazy" onerror="this.style.opacity=0.1" />
         <div class="poster-meta">
           <div class="poster-title">${title}</div>
           <div class="poster-sub">${rate}${year ? `<span>${year}</span>` : ""}</div>
