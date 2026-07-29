@@ -84,6 +84,12 @@ export const AuthManager = {
       this.serverConfig = cachedCfg;
       if (await this._establishSession()) {
         this._setState(AuthState.AUTHENTICATED, { serverConfig: cachedCfg });
+        // The cache is here to skip a round trip on launch, not to pin the
+        // description of the server forever. Flipping AuthMode server-side
+        // otherwise leaves settings reporting the old mode until the user
+        // re-enters the address by hand. Refreshed in the background because
+        // nothing on screen is waiting for it.
+        this._refreshServerConfig();
         return;
       }
       // Cached config could not establish a session → fall through to full connect.
@@ -113,6 +119,15 @@ export const AuthManager = {
       }
     } catch (e) {}
     return false;
+  },
+
+  async _refreshServerConfig() {
+    try {
+      const cfg = await api.getServerConfig();
+      if (!cfg) return;
+      this.serverConfig = cfg;
+      api.setStoredServerConfig(cfg);
+    } catch (e) { /* keep the cached copy — this is best effort */ }
   },
 
   // User submitted a server URL.
