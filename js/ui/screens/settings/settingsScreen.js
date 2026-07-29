@@ -13,7 +13,7 @@ import { t, setLang, nextLang } from "../../../core/i18n.js";
 
 // Fallback when webOS.fetchAppInfo is unavailable (desktop / tests).
 // Keep in sync with appinfo.json / package.json.
-const CLIENT_VERSION_FALLBACK = "0.4.1";
+const CLIENT_VERSION_FALLBACK = "0.4.2";
 
 function readClientVersion() {
   return new Promise((resolve) => {

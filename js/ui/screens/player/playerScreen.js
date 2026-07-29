@@ -16,6 +16,11 @@ import {
   isPlayableFallbackResult,
   isVerifiedPlaybackResult
 } from "../../../core/network/sourceRanking.js";
+import {
+  initialStallState,
+  nextStallState,
+  isStalled
+} from "../../../core/playback/stallDetector.js";
 
 // Monochrome inline SVG glyphs (inherit button color via currentColor) —
 // replaces the colored system emoji that rendered as ugly yellow icons.
@@ -54,6 +59,8 @@ export const PlayerScreen = {
   _lastSaveAt: 0,
   _isExiting: false,      // re-entrancy guard for stop+exit (back key / error / ended)
   _playToken: 0,          // race guard: each _playIndex call gets a token; stale async results are discarded
+  _stall: null,           // stallDetector state; see _tick
+  _stallArmed: false,     // only watch the clock once this load has actually played a frame
 
   async mount(params = {}) {
     this.container = document.getElementById("player");
@@ -80,6 +87,8 @@ export const PlayerScreen = {
     this._lastSaveAt = 0;
     this._isExiting = false;
     this._playToken = 0;
+    this._stall = initialStallState();
+    this._stallArmed = false;
 
     this.container.innerHTML = `
       <video id="videoPlayer" autoplay playsinline webkit-playsinline preload="auto"
@@ -139,7 +148,15 @@ export const PlayerScreen = {
   _bindVideo() {
     const v = this.video;
     const on = (ev, fn) => { v.addEventListener(ev, fn); this._listeners.push([ev, fn]); };
-    on("loadstart", () => this.container.querySelector("#playerLoading")?.classList.remove("hidden"));
+    on("loadstart", () => {
+      this.container.querySelector("#playerLoading")?.classList.remove("hidden");
+      // A new load has its own startup buffering; nothing to watch yet.
+      this._disarmStall();
+    });
+    // Buffer underrun. Legitimate on a slow network, and also the first visible
+    // symptom of the frozen-demuxer failure, so show the spinner either way —
+    // without it a stall is indistinguishable from a still frame.
+    on("waiting", () => this.container.querySelector("#playerLoading")?.classList.remove("hidden"));
     on("canplay", () => {
       this.container.querySelector("#playerLoading")?.classList.add("hidden");
       this._applyResume();
@@ -151,6 +168,10 @@ export const PlayerScreen = {
     on("playing", () => {
       this.paused = false;
       this.container.querySelector("#playerLoading")?.classList.add("hidden");
+      // Frames are actually being produced — from here on the clock is expected
+      // to move, so a frozen currentTime means something broke.
+      this._stallArmed = true;
+      this._stall = initialStallState();
       this._renderButtons();
     });
     on("pause", () => { this.paused = true; this._renderButtons(); this._saveRecord(true); });
@@ -304,6 +325,46 @@ export const PlayerScreen = {
       const now = Date.now();
       if (now - this._lastSaveAt >= RECORD_SAVE_INTERVAL_MS) this._saveRecord();
     }
+    this._checkStall(v);
+  },
+
+  // Watch for playback that reports itself as running while the clock stands
+  // still. See stallDetector.js for why the `error` event cannot be relied on.
+  _checkStall(v) {
+    if (!this._stallArmed || this._isExiting) return;
+    this._stall = nextStallState(this._stall, {
+      currentTime: v.currentTime || 0,
+      paused: v.paused,
+      seeking: v.seeking,
+      ended: v.ended,
+      now: Date.now()
+    });
+    if (!isStalled(this._stall)) return;
+    // Read before disarming — _disarmStall resets the counter.
+    const stalledMs = this._stall.stalledMs;
+    // Disarm so the handler cannot re-enter on the next tick; switching sources
+    // triggers a fresh load and the next `playing` re-arms.
+    this._disarmStall();
+    console.error("[DecoTV] playback stalled", JSON.stringify({
+      sourceKey: this.currentSourceKey,
+      sourceName: this.params?.sourceName || "",
+      frozenAt: v.currentTime,
+      stalledMs,
+      readyState: v.readyState,
+      networkState: v.networkState
+    }));
+    this._handlePlaybackError({
+      sourceKey: this.currentSourceKey,
+      sourceName: this.params?.sourceName || "",
+      url: this.episodes?.[this.index] || "",
+      stalled: true,
+      frozenAt: v.currentTime
+    });
+  },
+
+  _disarmStall() {
+    this._stallArmed = false;
+    this._stall = initialStallState();
   },
 
   // Seek to the resume position once, when the initial episode's duration is
@@ -363,6 +424,7 @@ export const PlayerScreen = {
     const errCode = v?.error?.code;
     const errMap = { 1: "ABORTED", 2: "NETWORK", 3: "DECODE", 4: "SRC_NOT_SUPPORTED" };
     let errLabel = errMap[errCode] || "";
+    if (debug?.stalled) errLabel = "STALL"; // no error code is set in this case
     if (!errLabel) {
       if (debug?.resolveError) errLabel = "RESOLVE_FAIL";
       else if (debug?.resolveEmpty) errLabel = "RESOLVE_EMPTY";
@@ -380,7 +442,10 @@ export const PlayerScreen = {
     if (next) {
       const key = getSourceProbeKey(next);
       showToast(`${errLabel} · ${srcName} → 换源`);
-      this._switchToSourceKey(key);
+      // Failover should continue where playback died, not restart the episode.
+      // (A manual switch from the side panel still starts at 0 — there the user
+      // is choosing a source deliberately, not being rescued mid-scene.)
+      this._switchToSourceKey(key, { resumeAt: v?.currentTime || 0 });
     } else {
       // All sources exhausted → back to detail.
       showToast(`全部源不可用 · ${errLabel}`);
@@ -520,7 +585,9 @@ export const PlayerScreen = {
     this._resetControlsAutoHide();
   },
 
-  _switchToSourceKey(key) {
+  // opts.resumeAt — seconds to pick up from on the new source. Omitted for a
+  // manual switch, which deliberately restarts the episode.
+  _switchToSourceKey(key, opts = {}) {
     const src = this.allSources.find((s) => getSourceProbeKey(s) === key);
     if (!src) return;
     if (key === this.currentSourceKey) { this._closeSourcePanel(); return; }
@@ -548,8 +615,10 @@ export const PlayerScreen = {
     }
     const newIndex = Math.min(this.index, newEpisodes.length - 1);
     this.index = newIndex;
-    // Outgoing source already saved above; start the new source cleanly at 0.
-    this.resumeTime = 0;
+    // Outgoing source already saved above. A manual switch starts the new
+    // source cleanly at 0; an automatic failover passes resumeAt so the viewer
+    // keeps their place instead of being thrown back to the opening titles.
+    this.resumeTime = Math.max(0, Number(opts.resumeAt || 0));
     this._resumeApplied = false;
     this._closeSourcePanel();
     this._playIndex(newIndex);
