@@ -2,8 +2,10 @@
 // Mirrors OrionTV authStore.checkLoginStatus():
 //   no apiBaseUrl      → server input screen
 //   server-config fail → server input screen (with error)
-//   StorageType localstorage OR AuthMode public → auto POST /api/login (empty creds)
-//   otherwise           → login screen (username + password)
+//   persisted service cookie → authenticated
+//   stored credentials       → refresh service cookie
+//   public/localstorage      → anonymous login
+//   otherwise                → login screen (username + password)
 // Any 401 elsewhere → re-run bootstrap.
 
 import { api, STORAGE_BASEURL } from "../network/decotvClient.js";
@@ -90,17 +92,27 @@ export const AuthManager = {
     await this.connect(stored);
   },
 
-  // This app targets public-mode DecoTV servers only (see README): browsing,
-  // search and playback work anonymously, and favorites / play records are kept
-  // on-device. Establish an anonymous session; fail on non-public servers.
-  async _establishSession() {
-    if (!this.canBrowseAnonymously()) return false;
+  // Prefer the cookie persisted by the Luna service. If it is absent, refresh
+  // from stored credentials; public servers can still browse anonymously.
+  async _establishSession({ ignorePersisted = false } = {}) {
     try {
-      await api.login(undefined, undefined);
-      return true;
-    } catch (e) {
-      return false;
-    }
+      const creds = this.getStoredCredentials();
+      if (!ignorePersisted && await api.hasPersistedSession()) {
+        this.loggedInUser = creds?.username || null;
+        return true;
+      }
+      if (creds?.password) {
+        await api.login(creds.username, creds.password);
+        this.loggedInUser = creds.username || null;
+        return true;
+      }
+      if (this.canBrowseAnonymously()) {
+        await api.login(undefined, undefined);
+        this.loggedInUser = null;
+        return true;
+      }
+    } catch (e) {}
+    return false;
   },
 
   // User submitted a server URL.
@@ -116,14 +128,8 @@ export const AuthManager = {
         this._setState(AuthState.AUTHENTICATED, { serverConfig: cfg });
         return;
       }
-      // Non-public server: this app does not support account login. Send the
-      // user back to the server screen with a clear, friendly explanation.
-      const mode = cfg?.AuthMode || t("auth.unknownMode");
-      api.setBaseUrl("");
-      LocalStore.remove(STORAGE_BASEURL);
-      this._setState(AuthState.NEED_SERVER, {
-        error: t("auth.nonPublicMode", { mode })
-      });
+      // Password-mode servers are supported by the bundled JS service.
+      this._setState(AuthState.NEED_LOGIN, { serverConfig: cfg });
     } catch (e) {
       api.setBaseUrl("");
       LocalStore.remove(STORAGE_BASEURL);
@@ -181,7 +187,7 @@ export const AuthManager = {
       api.setBaseUrl(stored);
       try {
         if (!this.serverConfig) this.serverConfig = api.getStoredServerConfig();
-        return await this._establishSession();
+        return await this._establishSession({ ignorePersisted: true });
       } catch (e) {
         return false;
       } finally {

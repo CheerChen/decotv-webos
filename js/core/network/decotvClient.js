@@ -1,9 +1,16 @@
 // decotvClient.js — DecoTV / LunaTV-compatible API client for webOS.
 // Ported from OrionTV services/api.ts (TypeScript → vanilla JS).
-// AsyncStorage → localStorage; cookie handling delegated to fetch credentials:'include'.
-// Verified against DecoTV 1.5.0 (kvrocks storage, public auth mode) on 2026-07-26.
+// AsyncStorage → localStorage. On webOS, authenticated requests go through the
+// bundled Luna JS service so its Node process can persist the auth cookie.
+// Browser/dev preview falls back to fetch().
 
 import { LocalStore } from "../storage/localStore.js";
+import {
+  clearLunaSession,
+  getLunaSession,
+  hasLunaTransport,
+  lunaFetch
+} from "./lunaTransport.js";
 
 // region: --- Types (documentation only, JS) ---
 // DoubanItem       { id, title, poster, rate, year }
@@ -49,17 +56,28 @@ export class DecoTVClient {
 
   async _fetch(url, options = {}) {
     if (!this.baseURL) throw new Error("API_URL_NOT_SET");
+    const timeoutMs = options.timeoutMs ?? 10000;
+    const requestOptions = { ...options };
+    delete requestOptions.timeoutMs;
+
+    if (hasLunaTransport()) {
+      const response = await lunaFetch(this.baseURL, url, {
+        ...requestOptions,
+        timeoutMs
+      });
+      return this._checkResponse(response);
+    }
+
     // Default timeout: 10s. Caller can override via options.timeoutMs = 0 (no timeout)
     // or pass their own AbortController via options.signal (timeout is skipped).
-    const timeoutMs = options.timeoutMs ?? 10000;
-    const callerSignal = options.signal;
+    const callerSignal = requestOptions.signal;
     if (timeoutMs > 0 && !callerSignal) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
         const response = await fetch(`${this.baseURL}${url}`, {
           credentials: "include",
-          ...options,
+          ...requestOptions,
           signal: controller.signal,
         });
         return this._checkResponse(response);
@@ -73,7 +91,7 @@ export class DecoTVClient {
     // No timeout or caller has own signal — pass through directly.
     const response = await fetch(`${this.baseURL}${url}`, {
       credentials: "include",
-      ...options,
+      ...requestOptions,
     });
     return this._checkResponse(response);
   }
@@ -106,8 +124,15 @@ export class DecoTVClient {
       await this._fetch("/api/logout", { method: "POST" });
     } catch (e) {
       // best-effort: network errors don't block local cleanup
+    } finally {
+      await clearLunaSession(this.baseURL);
     }
     return { ok: true };
+  }
+
+  async hasPersistedSession() {
+    const state = await getLunaSession(this.baseURL);
+    return state.hasSession;
   }
 
   async getServerConfig() {
