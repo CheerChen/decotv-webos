@@ -130,8 +130,7 @@ ssh root@TV 'sync; reboot'   # first install needs reboot for sam registration
 Or package locally:
 
 ```bash
-# -n is required: native ES modules break the bundled minifier
-ares-package . -n
+./scripts/package.sh
 # → com.cheerchen.decotv_<version>_all.ipk
 ```
 

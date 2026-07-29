@@ -130,8 +130,7 @@ ssh root@TV 'sync; reboot'   # 首次安装需重启，sam 才会注册应用
 也可本地打包：
 
 ```bash
-# -n 必须：源码为原生 ES modules，内置压缩器无法处理
-ares-package . -n
+./scripts/package.sh
 # → com.cheerchen.decotv_<version>_all.ipk
 ```
 
