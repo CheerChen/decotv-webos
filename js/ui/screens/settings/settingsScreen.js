@@ -9,10 +9,11 @@ import { LocalLibrary } from "../../../core/storage/localLibrary.js";
 import { showToast } from "../../toast.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
 import { escapeHtml } from "../../utils.js";
+import { t, setLang, nextLang } from "../../../core/i18n.js";
 
 // Fallback when webOS.fetchAppInfo is unavailable (desktop / tests).
 // Keep in sync with appinfo.json / package.json.
-const CLIENT_VERSION_FALLBACK = "0.4.0";
+const CLIENT_VERSION_FALLBACK = "0.4.1";
 
 function readClientVersion() {
   return new Promise((resolve) => {
@@ -40,7 +41,10 @@ function infoRow(label, value) {
 export const SettingsScreen = {
   container: null,
 
-  async mount() {
+  // params.focusAction re-focuses a specific row after a re-mount. The language
+  // toggle re-mounts to re-render every string, and without this the focus
+  // would jump back to the top of the list on each press.
+  async mount(params = {}) {
     this.container = document.getElementById("settings");
     const baseUrl = api.getStoredBaseUrl() || "—";
     const siteName = AuthManager.serverConfig?.SiteName || "—";
@@ -55,31 +59,35 @@ export const SettingsScreen = {
       <div class="content-scroll" id="settingsScroll">
         <div class="settings-layout">
           <div class="settings-col settings-col-actions">
-            <div class="section-title">选项</div>
+            <div class="section-title">${t("settings.options")}</div>
             <div class="settings-list">
+              <div class="settings-item focusable" data-action="toggle-lang">
+                <div class="settings-label">${t("settings.language")}</div>
+                <div class="settings-value">${escapeHtml(t("lang.self"))}</div>
+              </div>
               <div class="settings-item focusable" data-action="change-server">
-                <div class="settings-label">切换服务器</div>
+                <div class="settings-label">${t("settings.changeServer")}</div>
                 <div class="settings-value">›</div>
               </div>
               <div class="settings-item focusable" data-action="clear-records">
-                <div class="settings-label">清空播放记录</div>
+                <div class="settings-label">${t("settings.clearRecords")}</div>
                 <div class="settings-value">›</div>
               </div>
             </div>
           </div>
           <div class="settings-col settings-col-info">
-            <div class="section-title">本机信息</div>
+            <div class="section-title">${t("settings.deviceInfo")}</div>
             <div class="settings-list">
-              ${infoRow("应用版本", clientVersion)}
-              ${infoRow("应用 ID", "com.cheerchen.decotv")}
+              ${infoRow(t("settings.appVersion"), clientVersion)}
+              ${infoRow(t("settings.appId"), "com.cheerchen.decotv")}
             </div>
-            <div class="section-title">服务器信息</div>
+            <div class="section-title">${t("settings.serverInfo")}</div>
             <div class="settings-list">
-              ${infoRow("站点名称", siteName)}
-              ${infoRow("服务器地址", baseUrl)}
-              ${infoRow("服务端版本", serverVersion)}
-              ${infoRow("存储模式", storageType)}
-              ${infoRow("认证模式", authMode)}
+              ${infoRow(t("settings.siteName"), siteName)}
+              ${infoRow(t("settings.serverUrl"), baseUrl)}
+              ${infoRow(t("settings.serverVersion"), serverVersion)}
+              ${infoRow(t("settings.storageType"), storageType)}
+              ${infoRow(t("settings.authMode"), authMode)}
             </div>
           </div>
         </div>
@@ -87,7 +95,11 @@ export const SettingsScreen = {
     `;
     ScreenUtils.show(this.container);
     bindNavClicks(this.container);
-    ScreenUtils.setInitialFocus(this.container.querySelector('.settings-item[data-action="change-server"]'));
+    const focusAction = params.focusAction || "change-server";
+    ScreenUtils.setInitialFocus(
+      this.container.querySelector(`.settings-item[data-action="${focusAction}"]`)
+      || this.container.querySelector('.settings-item[data-action="change-server"]')
+    );
   },
 
   async onKeyDown(event) {
@@ -97,6 +109,14 @@ export const SettingsScreen = {
       const focused = this.container.querySelector(".focused");
       if (!focused) return;
       const action = focused.dataset.action;
+      if (action === "toggle-lang") {
+        // Re-mount so every string on the screen re-renders in the new
+        // language; navigate() with the current route just cleans up and
+        // mounts again, so nothing is pushed onto the back stack.
+        setLang(nextLang());
+        Router.navigate("settings", { focusAction: "toggle-lang" });
+        return;
+      }
       if (action === "change-server") {
         LocalStore.remove(STORAGE_BASEURL);
         api.setBaseUrl("");
@@ -106,7 +126,7 @@ export const SettingsScreen = {
       }
       if (action === "clear-records") {
         LocalLibrary.deletePlayRecord(null);
-        showToast("已清空播放记录");
+        showToast(t("settings.clearedRecords"));
         return;
       }
       if (handleNavAction(action)) return;

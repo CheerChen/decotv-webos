@@ -1,6 +1,7 @@
 // splashScreen.js — transient loading screen.
 
 import { ScreenUtils } from "../../navigation/screen.js";
+import { t } from "../../../core/i18n.js";
 
 export const SplashScreen = {
   container: null,
@@ -16,7 +17,7 @@ export const SplashScreen = {
           <div class="splash-d">D</div>
         </div>
         <div class="splash-word"><span>Deco</span><span class="splash-word-tv">TV</span></div>
-        <div class="splash-status">连接中…</div>
+        <div class="splash-status">${t("splash.connecting")}</div>
       </div>
     `;
     ScreenUtils.show(this.container);

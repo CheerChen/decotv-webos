@@ -3,6 +3,7 @@
 import { ScreenUtils } from "../../navigation/screen.js";
 import { AuthManager, AuthState } from "../../../core/auth/authManager.js";
 import { showToast } from "../../toast.js";
+import { t } from "../../../core/i18n.js";
 
 export const ServerScreen = {
   container: null,
@@ -24,16 +25,16 @@ export const ServerScreen = {
       <div class="center-wrap">
         <div class="form-card">
           <h1 class="form-title">DecoTV</h1>
-          <p class="form-subtitle">输入服务端地址</p>
+          <p class="form-subtitle">${t("server.subtitle")}</p>
           <div class="form-row">
-            <label class="form-label" for="serverUrlInput">服务器 URL</label>
+            <label class="form-label" for="serverUrlInput">${t("server.urlLabel")}</label>
             <input id="serverUrlInput" class="form-input focusable" type="text"
               autocomplete="off" spellcheck="false"
               placeholder="http://192.168.0.110:4000" />
           </div>
           <div class="form-error">${this.error}</div>
           <div class="form-actions">
-            <button id="connectBtn" class="btn primary focusable" data-action="connect">连接</button>
+            <button id="connectBtn" class="btn primary focusable" data-action="connect">${t("server.connect")}</button>
           </div>
         </div>
       </div>
@@ -68,7 +69,7 @@ export const ServerScreen = {
     const input = this.container.querySelector("#serverUrlInput");
     let url = (input?.value || "").trim();
     if (!url) {
-      this.error = "请输入服务器地址";
+      this.error = t("server.emptyUrl");
       this._render();
       this.container.querySelector("#serverUrlInput").focus();
       return;
@@ -78,7 +79,7 @@ export const ServerScreen = {
     this.connecting = true;
     this.error = "";
     const errEl = this.container.querySelector(".form-error");
-    if (errEl) errEl.textContent = "连接中…";
+    if (errEl) errEl.textContent = t("server.connecting");
     try {
       await AuthManager.connect(url);
     } catch (e) {

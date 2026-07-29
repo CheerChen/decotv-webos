@@ -5,6 +5,7 @@ import { FocusEngine } from "./ui/navigation/focusEngine.js";
 import { AuthManager, AuthState } from "./core/auth/authManager.js";
 import { api } from "./core/network/decotvClient.js";
 import { LocalLibrary, SCHEMA_VERSION } from "./core/storage/localLibrary.js";
+import { t, applyDocumentLang } from "./core/i18n.js";
 
 import { SplashScreen } from "./ui/screens/splash/splashScreen.js";
 import { ServerScreen } from "./ui/screens/server/serverScreen.js";
@@ -28,6 +29,9 @@ Router.register("player", PlayerScreen);
 
 document.addEventListener("DOMContentLoaded", async () => {
   console.log("DecoTV webOS starting...");
+  // Set <html lang> before the first screen renders so the webview picks the
+  // right font fallback from the very first frame.
+  applyDocumentLang();
   // One-time migration: old versions stored play records per-source; the new
   // per-movie key scheme makes those entries orphans, so wipe them on first
   // launch of the new version.
@@ -60,7 +64,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         Router.navigate("home", {}, { replaceHistory: true });
         break;
       case AuthState.ERROR:
-        Router.navigate("server", { error: extra?.error || "未知错误" }, { replaceHistory: true });
+        Router.navigate("server", { error: extra?.error || t("app.unknownError") }, { replaceHistory: true });
         break;
     }
   });

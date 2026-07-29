@@ -2,6 +2,7 @@
 
 import { ScreenUtils } from "../../navigation/screen.js";
 import { AuthManager } from "../../../core/auth/authManager.js";
+import { t } from "../../../core/i18n.js";
 
 export const LoginScreen = {
   container: null,
@@ -23,22 +24,22 @@ export const LoginScreen = {
     this.container.innerHTML = `
       <div class="center-wrap">
         <div class="form-card">
-          <h1 class="form-title">登录</h1>
-          <p class="form-subtitle">登录后收藏与播放记录会和网页端同步</p>
+          <h1 class="form-title">${t("login.title")}</h1>
+          <p class="form-subtitle">${t("login.subtitle")}</p>
           <div class="form-row">
-            <label class="form-label" for="loginUserInput">用户名</label>
+            <label class="form-label" for="loginUserInput">${t("login.username")}</label>
             <input id="loginUserInput" class="form-input focusable" type="text"
               autocomplete="off" spellcheck="false" />
           </div>
           <div class="form-row">
-            <label class="form-label" for="loginPassInput">密码</label>
+            <label class="form-label" for="loginPassInput">${t("login.password")}</label>
             <input id="loginPassInput" class="form-input focusable" type="password"
               autocomplete="off" spellcheck="false" />
           </div>
           <div class="form-error">${this.error}</div>
           <div class="form-actions">
-            <button id="loginBtn" class="btn primary focusable" data-action="login">登录</button>
-            ${canSkip ? `<button id="loginSkipBtn" class="btn ghost focusable" data-action="skip">仅浏览（跳过）</button>` : ""}
+            <button id="loginBtn" class="btn primary focusable" data-action="login">${t("login.submit")}</button>
+            ${canSkip ? `<button id="loginSkipBtn" class="btn ghost focusable" data-action="skip">${t("login.skip")}</button>` : ""}
           </div>
         </div>
       </div>
@@ -80,7 +81,7 @@ export const LoginScreen = {
     this.submitting = true;
     this.error = "";
     const errEl = this.container.querySelector(".form-error");
-    if (errEl) errEl.textContent = "登录中…";
+    if (errEl) errEl.textContent = t("login.submitting");
     try {
       await AuthManager.loginWithCredentials(u, p);
     } catch (e) {

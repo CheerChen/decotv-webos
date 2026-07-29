@@ -33,11 +33,11 @@
 
 | 首页 | 分类浏览 | 播放记录 |
 | :---: | :---: | :---: |
-| ![首页](assets/screenshots/home.png) | ![分类](assets/screenshots/search.png) | ![播放记录](assets/screenshots/library.png) |
+| ![首页](assets/screenshots/home.webp) | ![分类](assets/screenshots/search.webp) | ![播放记录](assets/screenshots/library.webp) |
 
 | 详情 · 多源测速 | 播放器 · 换源 | 设置 |
 | :---: | :---: | :---: |
-| ![详情](assets/screenshots/detail.png) | ![播放](assets/screenshots/player.png) | ![设置](assets/screenshots/settings.png) |
+| ![详情](assets/screenshots/detail.webp) | ![播放](assets/screenshots/player.webp) | ![设置](assets/screenshots/settings.webp) |
 
 ---
 
@@ -67,7 +67,8 @@
 | 播放失败换源 | 当前源失败后自动切下一源；播放中可打开换源侧栏手动切换 |
 | 进度记忆 | 按「标题 + 年份」记进度，换源不丢断点；支持继续观看 |
 | 本机收藏与记录 | 收藏 / 播放记录存在电视本地；设置中可清空播放记录 |
-| 设置分区 | 左侧可操作（切换服务器、清空记录），右侧只读（本机信息 + 服务器信息） |
+| 设置分区 | 左侧可操作（切换服务器、清空记录、语言），右侧只读（本机信息 + 服务器信息） |
+| 中英界面 | 跟随电视语言（非中文一律英文），可在设置中手动切换；片源与分类等服务端内容仍为中文 |
 | 遥控器导航 | D-pad / OK / 返回全覆盖；几何焦点引擎 |
 | 播放器 OSD | 实时分辨率与缓冲；选集 / 换源侧栏 |
 | 硬件解码 | 系统原生 HLS，无 HLS.js |

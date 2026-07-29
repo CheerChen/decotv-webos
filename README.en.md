@@ -33,11 +33,11 @@
 
 | Home | Category browse | Play history |
 | :---: | :---: | :---: |
-| ![Home](assets/screenshots/home.png) | ![Browse](assets/screenshots/search.png) | ![Library](assets/screenshots/library.png) |
+| ![Home](assets/screenshots/home.en.webp) | ![Browse](assets/screenshots/search.en.webp) | ![Library](assets/screenshots/library.en.webp) |
 
 | Detail · multi-source probe | Player · source switch | Settings |
 | :---: | :---: | :---: |
-| ![Detail](assets/screenshots/detail.png) | ![Player](assets/screenshots/player.png) | ![Settings](assets/screenshots/settings.png) |
+| ![Detail](assets/screenshots/detail.en.webp) | ![Player](assets/screenshots/player.webp) | ![Settings](assets/screenshots/settings.en.webp) |
 
 ---
 
@@ -67,7 +67,8 @@ Current version: [Releases](https://github.com/CheerChen/decotv-webos/releases).
 | Failover / manual switch | Auto next source on failure; in-player source side panel |
 | Progress memory | Keyed by title + year (survives source switch); resume support |
 | Local library | Favorites & play history on-device; clear history from Settings |
-| Settings layout | Left: actions (change server, clear history); right: read-only client + server info |
+| Settings layout | Left: actions (change server, clear history, language); right: read-only client + server info |
+| Chinese / English UI | Follows the TV language (anything non-Chinese gets English), switchable in Settings; server-supplied content such as titles and genres stays Chinese |
 | Remote UX | D-pad / OK / Back; geometry focus engine |
 | Player OSD | Live resolution + buffer; episode / source side panels |
 | Hardware decode | Platform HLS, no HLS.js |

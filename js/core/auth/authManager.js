@@ -8,6 +8,7 @@
 
 import { api, STORAGE_BASEURL } from "../network/decotvClient.js";
 import { LocalStore } from "../storage/localStore.js";
+import { t } from "../i18n.js";
 
 // Stored real-user credentials. On this server (AuthMode: public) browsing is
 // anonymous, but favorites / play-records require a real session cookie, which
@@ -117,11 +118,11 @@ export const AuthManager = {
       }
       // Non-public server: this app does not support account login. Send the
       // user back to the server screen with a clear, friendly explanation.
-      const mode = cfg?.AuthMode || "未知";
+      const mode = cfg?.AuthMode || t("auth.unknownMode");
       api.setBaseUrl("");
       LocalStore.remove(STORAGE_BASEURL);
       this._setState(AuthState.NEED_SERVER, {
-        error: `该服务器为「${mode}」模式，本应用仅支持 public（公开）模式的 DecoTV 服务器。请将服务器 AuthMode 设为 public 后重试。`
+        error: t("auth.nonPublicMode", { mode })
       });
     } catch (e) {
       api.setBaseUrl("");
@@ -192,8 +193,8 @@ export const AuthManager = {
 
   _humanizeError(e) {
     const msg = String(e?.message || e || "");
-    if (msg === "UNAUTHORIZED") return "凭据无效";
-    if (/Failed to fetch|NetworkError|HTTP 5\d\d/.test(msg)) return "无法连接到服务器";
+    if (msg === "UNAUTHORIZED") return t("auth.badCredentials");
+    if (/Failed to fetch|NetworkError|HTTP 5\d\d/.test(msg)) return t("auth.cannotConnect");
     return msg;
   }
 };
