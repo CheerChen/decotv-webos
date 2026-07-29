@@ -232,9 +232,14 @@ export class DecoTVClient {
   //   { quality, loadSpeed, pingTime, speedKBps, startupTimeMs, hasError,
   //     status, playable, message, failureKind, mediaType,
   //     originalUrl, resolvedUrl, playbackUrl, resolved, proxied, testedAt }
+  // timeoutMs is the SERVER's probe budget, not the client's. The server also
+  // resolves the URL, fetches the manifest and pulls a 384 KiB media sample on
+  // top of it, so probes with an 8s budget were measured taking 5-14s end to
+  // end. The client timeout needs that headroom — without it _fetch's 10s
+  // default cut probes off and reported healthy sources as timeouts.
   async probePlayback(url, source, timeoutMs = 8000, signal) {
     const u = `/api/playback/probe?url=${encodeURIComponent(url)}&source=${encodeURIComponent(source)}&timeoutMs=${timeoutMs}`;
-    const response = await this._fetch(u, { signal });
+    const response = await this._fetch(u, { signal, timeoutMs: timeoutMs + 7000 });
     return response.json();
   }
 
