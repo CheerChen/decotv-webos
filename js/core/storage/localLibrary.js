@@ -1,11 +1,14 @@
-// localLibrary.js — device-local favorites & play records.
+// localLibrary.js — on-device favorites & play records.
 //
-// DecoTV in public mode gates its /api/favorites and /api/playrecords behind a
-// real account cookie, which a file:// webOS app cannot carry cross-origin
-// (see README). This app therefore keeps favorites and play progress on the TV
-// itself, in localStorage. The method shapes mirror the DecoTV API client so
-// screen code stays identical; keys use the DecoTV `${source}+${id}` convention
-// and records use a 1-based `index` (episode number).
+// Every screen reads its library state from here, synchronously. When the user
+// is signed in, librarySync keeps this store in step with /api/favorites and
+// /api/playrecords in the background; when they are browsing anonymously this
+// is simply where the data lives. Either way the read path is the same, which
+// is why none of the screens know whether syncing is on.
+//
+// Method shapes mirror the DecoTV API client. Favorite keys use the DecoTV
+// `${source}+${id}` convention and records use a 1-based `index` (episode
+// number).
 
 import { LocalStore } from "./localStore.js";
 
@@ -74,6 +77,12 @@ export const LocalLibrary = {
     return { ok: true };
   },
 
+  // Whole-map writes used by librarySync when the server takes over as the
+  // source of truth. Screens keep reading through the getters above.
+  replaceFavorites(all) {
+    LocalStore.set(FAVORITES_KEY, all || {});
+  },
+
   // ── Play records ────────────────────────────────────────────────────────
   // Shape: { "title|year": { title, source_name, cover, index(1-based), total_episodes,
   //                         play_time, total_time, year, save_time } }
@@ -100,5 +109,9 @@ export const LocalLibrary = {
     delete all[key];
     LocalStore.set(RECORDS_KEY, all);
     return { ok: true };
+  },
+
+  replaceRecords(all) {
+    LocalStore.set(RECORDS_KEY, all || {});
   }
 };
