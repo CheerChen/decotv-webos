@@ -100,13 +100,17 @@ describe("nav header tabs", () => {
 describe("t()", () => {
   beforeEach(() => setLang("en"));
 
+  // Interpolation is asserted through an unknown key on purpose. The fallback
+  // returns the key itself and then runs it through the same substitution, so
+  // the behaviour can be pinned without tying the test to the wording of some
+  // particular message — which is exactly what broke it last time one was
+  // reworded.
   test("substitutes named placeholders", () => {
-    assert.match(t("auth.nonPublicMode", { mode: "password" }), /password/);
-    assert.doesNotMatch(t("auth.nonPublicMode", { mode: "password" }), /\{mode\}/);
+    assert.equal(t("hello {name}", { name: "webOS" }), "hello webOS");
   });
 
   test("leaves a placeholder untouched when the var is missing", () => {
-    assert.match(t("auth.nonPublicMode", {}), /\{mode\}/);
+    assert.equal(t("hello {name}", {}), "hello {name}");
   });
 
   test("returns the key itself when the key is unknown", () => {

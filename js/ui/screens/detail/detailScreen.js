@@ -672,7 +672,7 @@ export const DetailScreen = {
     });
   },
 
-  // Look up the saved (device-local) play record for a movie.
+  // Look up the saved play record for a movie.
   // Keyed per-movie (title|year), so any source for the same title shares
   // one record — the 3-pick algorithm can switch sources and still resume.
   _lookupRecord(source) {

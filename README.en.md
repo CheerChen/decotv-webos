@@ -66,7 +66,7 @@ Current version: [Releases](https://github.com/CheerChen/decotv-webos/releases).
 | Episode-first layout | Episode grid sits above the (often long) source list |
 | Failover / manual switch | Auto next source on failure; in-player source side panel |
 | Progress memory | Keyed by title + year (survives source switch); resume support |
-| Local library | Favorites & play history on-device; clear history from Settings |
+| Library | Favorites & play history sync with the server once signed in, so they follow you across devices; stored on the TV otherwise. Clear history from Settings |
 | Settings layout | Left: actions (change server, clear history, language); right: read-only client + server info |
 | Chinese / English UI | Follows the TV language (anything non-Chinese gets English), switchable in Settings; server-supplied content such as titles and genres stays Chinese |
 | Remote UX | D-pad / OK / Back; geometry focus engine |
@@ -77,25 +77,23 @@ Current version: [Releases](https://github.com/CheerChen/decotv-webos/releases).
 
 | Topic | PC / browser DecoTV | This client |
 | --- | --- | --- |
-| Auth | Multiple modes | **`public` only** (see below) |
-| Favorites / progress | Can sync via server | **TV-local `localStorage`**, no multi-device sync |
+| Auth | Account modes | Same; `public` servers can also be browsed anonymously |
+| Favorites / progress | Sync via server | Same, once signed in; TV-local otherwise |
 | Source config | Server admin | Same — not configured in-app |
 | Decode | HLS.js / ArtPlayer, etc. | Platform hardware decode |
 
-**Why `public` only:** the app loads from `file://`, so API calls are cross-site. A `SameSite=Lax` session cookie cannot be stored in the TV webview, and the app cannot read or set the `Cookie` header. The server must run in `public` mode so browse, search, and playback work without an account cookie.
+**How the session survives:** the app loads from `file://`, so API calls are cross-site. The TV webview will not store a `SameSite=Lax` session cookie, and page code can neither read nor set the `Cookie` header. The IPK bundles a webOS JS service that issues requests from its own Node process, outside the webview, where it can persist the cookie and send it back — which is what keeps an account session alive.
 
-```bash
-NEXT_PUBLIC_AUTH_MODE=public
-```
+**What `public` mode costs:** `/api/login` issues no cookie in that mode, so no account session can be established and `/api/favorites` and `/api/playrecords` answer 401. Browsing, search and playback are unaffected; favorites and play history fall back to TV-local storage with no cross-device sync. For syncing, drop `NEXT_PUBLIC_AUTH_MODE=public` from the server and set `USERNAME` and `PASSWORD`.
 
-Non-public servers surface a notice on the app’s server configuration screen.
+**Credential storage:** an account-mode server prompts for a sign-in once, and the username and password are kept in plain text in the TV's `localStorage` so the session can be re-established silently when it expires. That is a deliberate trade for a single-owner TV appliance; on a shared set, do not save an account.
 
 ---
 
 ## Requirements
 
 1. **LG webOS TV** (Developer Mode or Homebrew Channel; root optional)
-2. **DecoTV server** with `AuthMode = public`
+2. **DecoTV server** (`public` mode works anonymously; syncing favorites and play history needs an account mode)
 3. Network reachability from the TV to the server
 
 Server setup: [DecoTV](https://github.com/Decohererk/DecoTV)
@@ -140,9 +138,10 @@ Or package locally:
 
 1. Install and open **DecoTV**
 2. Enter the server URL, e.g. `http://192.168.1.10:3000`
-3. Browse the home wall with the D-pad; OK opens detail
-4. Detail probes sources and starts the best one; switch sources on failure or via the panel
-5. Favorites and play history live under Library; client and server info are read-only on the right of Settings
+3. An account-mode server asks for a sign-in once and re-establishes the session on its own afterwards; `public` servers can be skipped past
+4. Browse the home wall with the D-pad; OK opens detail
+5. Detail probes sources and starts the best one; switch sources on failure or via the panel
+6. Favorites and play history live under Library; client and server info are read-only on the right of Settings
 
 ---
 
@@ -155,7 +154,8 @@ Or package locally:
 | UI | Focus engine + screen router |
 | Playback | Native `<video>` + UMS hardware decode |
 | API | DecoTV / LunaTV-compatible HTTP |
-| Local data | `localStorage` (favorites, play history, server URL) |
+| Session | Bundled webOS JS service (Node process, outside the webview) |
+| Local data | `localStorage` (server URL, credentials, favorites, play history) |
 | Package | `ares-package` → IPK |
 
 ---
