@@ -12,11 +12,14 @@ import { api, STORAGE_BASEURL } from "../network/decotvClient.js";
 import { LocalStore } from "../storage/localStore.js";
 import { t } from "../i18n.js";
 
-// Stored real-user credentials. On this server (AuthMode: public) browsing is
-// anonymous, but favorites / play-records require a real session cookie, which
-// only a username+password login provides. We persist creds so the cookie can
-// be re-obtained silently on every launch and after any 401. Plaintext in
-// localStorage is acceptable for a single-owner TV appliance.
+// Stored credentials, keyed by server. Persisting them is what lets the cookie
+// be re-obtained silently on every launch and after any 401; plaintext in
+// localStorage is an accepted trade for a single-owner TV appliance.
+//
+// Keyed by server, because they used to be one flat record shared by every
+// address: connecting to a newly typed server would POST the previous one's
+// password to it before the user had agreed to trust it, and land on the home
+// screen if that server happened to answer 200.
 const STORAGE_CREDENTIALS = "decotv.credentials";
 
 export const AuthState = {
@@ -49,13 +52,34 @@ export const AuthManager = {
   },
 
   // ── Credential persistence ────────────────────────────────────────────────
-  getStoredCredentials() {
-    return LocalStore.get(STORAGE_CREDENTIALS, null);
+  _allCredentials() {
+    const raw = LocalStore.get(STORAGE_CREDENTIALS, null);
+    if (!raw || typeof raw !== "object") return {};
+    // Pre-per-server shape: a bare { username, password }. Attribute it to
+    // whichever server is configured now, which is the only one it could have
+    // been typed for.
+    if (typeof raw.username === "string") {
+      const current = api.getStoredBaseUrl();
+      const migrated = current ? { [current]: raw } : {};
+      LocalStore.set(STORAGE_CREDENTIALS, migrated);
+      return migrated;
+    }
+    return raw;
   },
 
-  setStoredCredentials(creds) {
-    if (creds && creds.username) LocalStore.set(STORAGE_CREDENTIALS, creds);
-    else LocalStore.remove(STORAGE_CREDENTIALS);
+  getStoredCredentials(baseUrl) {
+    const url = baseUrl || api.getStoredBaseUrl();
+    if (!url) return null;
+    return this._allCredentials()[url] || null;
+  },
+
+  setStoredCredentials(creds, baseUrl) {
+    const url = baseUrl || api.getStoredBaseUrl();
+    if (!url) return;
+    const all = this._allCredentials();
+    if (creds && creds.username) all[url] = creds;
+    else delete all[url];
+    LocalStore.set(STORAGE_CREDENTIALS, all);
   },
 
   isLoggedIn() {
@@ -98,20 +122,30 @@ export const AuthManager = {
     await this.connect(stored);
   },
 
-  // Prefer the cookie persisted by the Luna service. If it is absent, refresh
-  // from stored credentials; public servers can still browse anonymously.
+  // Neither a stored cookie nor a login that did not throw is proof of a
+  // session. The cookie may be expired, or have been issued by a server that
+  // has since changed its password; and a public-mode server answers
+  // /api/login with `{ok:true}` and no cookie at all whatever it is sent.
+  // Taking either as proof is what used to put the app on the home screen with
+  // every request 401ing behind it, and with no way to reach the login form.
+  // So each candidate session is probed against a per-user endpoint, and only
+  // an accepted one counts.
   async _establishSession({ ignorePersisted = false } = {}) {
+    this.loggedInUser = null;
     try {
       const creds = this.getStoredCredentials();
-      if (!ignorePersisted && await api.hasPersistedSession()) {
+      if (!ignorePersisted && await api.hasPersistedSession() && await api.verifySession()) {
         this.loggedInUser = creds?.username || null;
         return true;
       }
       if (creds?.password) {
         await api.login(creds.username, creds.password);
-        this.loggedInUser = creds.username || null;
-        return true;
+        if (await api.verifySession()) {
+          this.loggedInUser = creds.username || null;
+          return true;
+        }
       }
+      // No account session, but a public server serves browsing anonymously.
       if (this.canBrowseAnonymously()) {
         await api.login(undefined, undefined);
         this.loggedInUser = null;
@@ -157,6 +191,13 @@ export const AuthManager = {
     this._setState(AuthState.LOADING);
     try {
       await api.login(username, password);
+      // Same reasoning as _establishSession: a 200 from /api/login is not a
+      // session. Storing credentials the server will not honour would make
+      // every later silent re-auth fail the same way.
+      if (!await api.verifySession()) {
+        this._setState(AuthState.NEED_LOGIN, { error: t("auth.badCredentials") });
+        return;
+      }
       this.setStoredCredentials({ username, password });
       this.loggedInUser = username;
       const cfg = this.serverConfig || await api.getServerConfig();

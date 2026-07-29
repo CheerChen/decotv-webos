@@ -59,13 +59,17 @@ export class DecoTVClient {
     const timeoutMs = options.timeoutMs ?? 10000;
     const requestOptions = { ...options };
     delete requestOptions.timeoutMs;
+    // The session probe must not re-enter the 401 handler: that handler exists
+    // to rebuild a session, and rebuilding one is what asks for this probe.
+    const silent401 = requestOptions.silent401 === true;
+    delete requestOptions.silent401;
 
     if (hasLunaTransport()) {
       const response = await lunaFetch(this.baseURL, url, {
         ...requestOptions,
         timeoutMs
       });
-      return this._checkResponse(response);
+      return this._checkResponse(response, silent401);
     }
 
     // Default timeout: 10s. Caller can override via options.timeoutMs = 0 (no timeout)
@@ -80,7 +84,7 @@ export class DecoTVClient {
           ...requestOptions,
           signal: controller.signal,
         });
-        return this._checkResponse(response);
+        return this._checkResponse(response, silent401);
       } catch (e) {
         if (e?.name === "AbortError") throw new Error("TIMEOUT");
         throw e;
@@ -93,13 +97,13 @@ export class DecoTVClient {
       credentials: "include",
       ...requestOptions,
     });
-    return this._checkResponse(response);
+    return this._checkResponse(response, silent401);
   }
 
-  _checkResponse(response) {
+  _checkResponse(response, silent401 = false) {
     if (response.status === 401) {
       // Global 401 hook — authManager will navigate to login/server screen.
-      if (typeof this.onUnauthorized === "function") {
+      if (!silent401 && typeof this.onUnauthorized === "function") {
         try { this.onUnauthorized(); } catch (_) {}
       }
       throw new Error("UNAUTHORIZED");
@@ -130,9 +134,24 @@ export class DecoTVClient {
     return { ok: true };
   }
 
+  // Whether the service is holding a cookie. Says nothing about whether that
+  // cookie still works — see verifySession.
   async hasPersistedSession() {
     const state = await getLunaSession(this.baseURL);
     return state.hasSession;
+  }
+
+  // Whether the server still accepts the session. Favorites is the cheapest
+  // per-user endpoint: it answers 200 with `{}` for a signed-in account and
+  // 401 for everyone else, including an expired cookie and a public-mode
+  // server that issued no cookie in the first place.
+  async verifySession() {
+    try {
+      await this._fetch("/api/favorites", { timeoutMs: 8000, silent401: true });
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   async getServerConfig() {
