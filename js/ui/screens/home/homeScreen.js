@@ -40,10 +40,13 @@ export const HomeScreen = {
   rowsData: [],
   loading: true,
 
-  async mount() {
+  async mount(params = {}) {
     this.container = document.getElementById("home");
     this.rowsData = [];
     this.loading = true;
+    // Digit 0 (and any caller that asks) prefers the first cover over the
+    // nav tab — setInitialFocus runs once the first poster-card appears.
+    this.focusFirstItem = Boolean(params.focusFirstItem);
     this.container.innerHTML = `
       ${renderNavHeader("nav-home")}
       <div class="content-scroll" id="homeScroll">
@@ -52,7 +55,9 @@ export const HomeScreen = {
     `;
     ScreenUtils.show(this.container);
     bindNavClicks(this.container);
-    ScreenUtils.setInitialFocus(this.container.querySelector('.nav-tab[data-action="nav-home"]'));
+    if (!this.focusFirstItem) {
+      ScreenUtils.setInitialFocus(this.container.querySelector('.nav-tab[data-action="nav-home"]'));
+    }
     this._loadRows();
   },
 
@@ -63,10 +68,17 @@ export const HomeScreen = {
     const results = new Array(ROWS.length).fill(null);
     let firstRendered = false;
 
+    const markerOf = (node) => (node
+      ? `${node.dataset.action || ""}|${node.dataset.key || ""}|${node.dataset.title || ""}|${node.dataset.row || ""}|${node.dataset.col || ""}`
+      : "");
+
     const renderReady = () => {
       // The "继续观看" row (mirrors PC home's first row) is rebuilt on every
       // pass rather than captured once, so a library pull landing mid-load is
       // picked up for free. It is a localStorage read, sorted and sliced.
+      // Capture focus identity before the wholesale innerHTML wipe so later
+      // row arrivals do not drop the ring (digit 0 / first-cover focus).
+      const marker = markerOf(scroll.querySelector(".focused"));
       let html = this._renderHistoryRow();
       for (let i = 0; i < results.length; i++) {
         const r = results[i];
@@ -81,9 +93,22 @@ export const HomeScreen = {
       }
       scroll.innerHTML = html;
       ScreenUtils.indexFocusables(scroll);
+      // First content: land on the first cover (digit 0's only initial focus
+      // path; otherwise upgrades the temporary nav-tab focus).
       if (!firstRendered) {
         const first = scroll.querySelector(".poster-card");
-        if (first) { ScreenUtils.setInitialFocus(first); firstRendered = true; }
+        if (first) {
+          ScreenUtils.setInitialFocus(first);
+          firstRendered = true;
+          this.focusFirstItem = false;
+        }
+        return;
+      }
+      // Subsequent incremental renders: restore the same card by identity.
+      if (marker) {
+        const restored = Array.from(scroll.querySelectorAll(".focusable"))
+          .find((node) => markerOf(node) === marker);
+        if (restored) ScreenUtils.setInitialFocus(restored);
       }
     };
     // Exposed so a library pull that lands after loading finished can still

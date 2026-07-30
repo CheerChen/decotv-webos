@@ -59,14 +59,21 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 24px 20px;
-  padding: 8px 0 40px;
+  /* Room for .poster-card.focused scale(1.06) + 3px ring between cells. */
+  padding: 12px 4px 40px;
 }
 
 .poster-row {
   display: flex;
   gap: 20px;
+  /* Horizontal scroll only in intent; any non-visible overflow-x forces
+     overflow-y to clip as well, so scale(1.06) + focus ring were cropped
+     on home rails while the category grid (overflow:visible) looked fine.
+     scale(1.06) on a ~220×370 card grows ~7px/side; +3px ring → ≥12px.
+     Negative margin keeps the unfocused rail aligned with section titles. */
   overflow-x: auto;
-  padding: 8px 0 24px;
+  padding: 18px 12px 36px;
+  margin: -10px -12px 0;
   scroll-snap-type: x mandatory;
 }
 

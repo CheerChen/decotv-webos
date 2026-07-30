@@ -2,6 +2,8 @@
 // Adapted from NuvioTV-WebOS focusEngine (Apache-2.0). Simplified to a single
 // `.focusable` + `data-action` pattern; zone/rail/panel patterns dropped.
 
+import { handleDigitShortcut } from "./navHeader.js";
+
 function isBackKey(event, normalizedCode) {
   const target = event?.target || null;
   const tagName = String(target?.tagName || "").toUpperCase();
@@ -137,6 +139,14 @@ export const FocusEngine = {
     const rawCode = Number(event?.keyCode || 0);
     if (rawCode === 13 || normalizedEvent.keyCode === 13) {
       event.preventDefault?.();
+    }
+
+    // Number-key shortcuts (0 = home, 1-9 = Douban content tabs). Only active
+    // when the nav header is on screen, so the player and the first-run
+    // screens (splash/server/login) are untouched; editable inputs are
+    // filtered inside handleDigitShortcut so URL/credential typing survives.
+    if (document.querySelector(".app-header") && handleDigitShortcut(event)) {
+      return;
     }
 
     this.router?.getCurrentScreen?.()?.onKeyDown?.(normalizedEvent);
