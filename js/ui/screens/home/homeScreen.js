@@ -12,24 +12,25 @@ import { escapeHtml, formatTime } from "../../utils.js";
 
 // Home rows. `fetch` selects the API:
 //   douban     — /api/douban?type&tag  (movie/tv 热门 charts)
-//   recommends — /api/douban/recommends with sort=R (首播/上映时间) for 最新*
-//                 (tv tag=最新 on /api/douban returns empty on DecoTV)
-// Classic rows removed — those live under the category tabs.
+//   categories — /api/douban/categories (anime/show recent-hot charts;
+//                same defaults as the 热门动漫 / 热门综艺 tabs)
+// Classic / 最新* rows removed — those live under the category tabs.
 const ROWS = [
   { title: "热门电影", fetch: "douban", type: "movie", tag: "热门" },
   { title: "热门剧集", fetch: "douban", type: "tv", tag: "热门" },
   {
-    title: "最新电影",
-    fetch: "recommends",
-    kind: "movie",
-    sort: "R"
+    title: "热门动漫",
+    fetch: "categories",
+    kind: "tv",
+    category: "tv",
+    type: "tv_animation"
   },
   {
-    title: "最新剧集",
-    fetch: "recommends",
+    title: "热门综艺",
+    fetch: "categories",
     kind: "tv",
-    format: "电视剧",
-    sort: "R"
+    category: "show",
+    type: "show"
   }
 ];
 
@@ -134,14 +135,14 @@ export const HomeScreen = {
   },
 
   async _fetchRow(row) {
-    if (row.fetch === "recommends") {
-      const data = await api.getDoubanRecommends(row.kind, {
-        format: row.format || "",
-        category: row.category || "",
-        sort: row.sort || "R",
-        limit: PAGE_SIZE,
-        start: 0
-      });
+    if (row.fetch === "categories") {
+      const data = await api.getDoubanCategories(
+        row.kind,
+        row.category,
+        row.type,
+        PAGE_SIZE,
+        0
+      );
       return Array.isArray(data?.list) ? data.list : [];
     }
     // Default: classic /api/douban chart by type + tag.
