@@ -7,7 +7,7 @@ set -eu
 
 APP_ID="com.cheerchen.decotv"
 SERVICE_ID="${APP_ID}.service"
-VERSION="0.4.2"
+VERSION="0.5.0"
 LUNA_DIR="/var/luna-service2-dev"
 SERVICE_DIR="/media/developer/apps/usr/palm/services/${SERVICE_ID}"
 

@@ -7,10 +7,10 @@
 // Referer of https://movie.douban.com/, neither of which a file:// document
 // sends. Roughly nine in ten posters on the home screen come from Douban.
 //
-// So the bytes are fetched by the JS service, which is free to set any header
-// and needs no cookie for a public image host, and arrive here as base64 to be
-// turned into a blob URL. Screens render a placeholder plus the remote address
-// and this module swaps in the real image once it has it.
+// So the bytes are fetched by the JS service through DecoTV's authenticated
+// proxy, a persistent disk cache, and a tightly scoped Douban fallback. They
+// arrive here as base64 and are turned into a blob URL. Screens render a
+// placeholder plus the remote address and this module swaps in the real image.
 
 import { escapeAttr } from "./utils.js";
 import { api } from "../core/network/decotvClient.js";
@@ -27,13 +27,13 @@ const MAX_CACHED = 300;
 // share the same bus.
 const CONCURRENCY = 4;
 
-const cache = new Map();      // remote url -> blob url
-const pending = new Map();    // remote url -> Promise<blob url>
+const cache = new Map();      // server + remote url -> blob url
+const pending = new Map();    // server + remote url -> Promise<blob url>
 const queue = [];
 let active = 0;
 
-function remember(url, objectUrl) {
-  cache.set(url, objectUrl);
+function remember(key, objectUrl) {
+  cache.set(key, objectUrl);
   while (cache.size > MAX_CACHED) {
     const oldest = cache.keys().next().value;
     const stale = cache.get(oldest);
@@ -58,13 +58,20 @@ function pump() {
 }
 
 function resolve(url) {
-  if (cache.has(url)) return Promise.resolve(cache.get(url));
-  if (pending.has(url)) return pending.get(url);
+  const baseUrl = api.baseURL || api.getStoredBaseUrl() || "";
+  const key = `${baseUrl}\0${url}`;
+  if (cache.has(key)) return Promise.resolve(cache.get(key));
+  if (pending.has(key)) return pending.get(key);
   const task = new Promise((done, fail) => {
-    queue.push(() => lunaFetchImage(url).then((result) => {
-      const objectUrl = toBlobUrl(result.base64, result.contentType);
-      remember(url, objectUrl);
-      done(objectUrl);
+    queue.push(() => lunaFetchImage(baseUrl, url).then((result) => {
+      try {
+        const objectUrl = toBlobUrl(result.base64, result.contentType);
+        remember(key, objectUrl);
+        done(objectUrl);
+      } catch (error) {
+        fail(error);
+        throw error;
+      }
     }, (error) => {
       fail(error);
       // Rethrow is deliberate: pump() only needs to know the slot is free.
@@ -72,8 +79,8 @@ function resolve(url) {
     }));
     pump();
   });
-  pending.set(url, task);
-  task.catch(() => {}).then(() => pending.delete(url));
+  pending.set(key, task);
+  task.catch(() => {}).then(() => pending.delete(key));
   return task;
 }
 
@@ -95,10 +102,20 @@ function hydrate(img) {
   if (!remote) return;
   // Claim it first: a re-render can hand us the same element twice.
   delete img.dataset.poster;
-  const cached = cache.get(remote);
-  if (cached) { img.src = cached; return; }
-  resolve(remote).then((objectUrl) => { img.src = objectUrl; },
-    () => { img.style.opacity = "0.15"; });
+  img.dataset.posterState = "pending";
+  const loaded = () => { img.dataset.posterState = "loaded"; };
+  const failed = () => {
+    img.dataset.posterState = "failed";
+    img.style.opacity = "0.15";
+  };
+  resolve(remote).then((objectUrl) => {
+    // Bind only when assigning the real blob. The transparent data-URI
+    // placeholder may finish after hydration begins; listening earlier would
+    // mark a still-pending poster as loaded and make TV smoke tests lie.
+    img.addEventListener?.("load", loaded, { once: true });
+    img.addEventListener?.("error", failed, { once: true });
+    img.src = objectUrl;
+  }, failed);
 }
 
 export function hydratePosters(root) {

@@ -51,6 +51,8 @@ PROBE = """(function () {
   for (var i = 0; i < imgs.length; i++) {
     if (imgs[i].complete && imgs[i].naturalWidth === 0) broken.push(imgs[i].src.slice(-60));
   }
+  var posterPending = document.querySelectorAll('img[data-poster], img[data-poster-state="pending"]').length;
+  var posterFailed = document.querySelectorAll('img[data-poster-state="failed"]').length;
   var f = focused[0];
   return {
     screen: (window.__router && window.__router.current) || null,
@@ -58,6 +60,8 @@ PROBE = """(function () {
     focusedCount: focused.length,
     focusedAction: f ? f.getAttribute('data-action') : null,
     images: imgs.length,
+    posterPending: posterPending,
+    posterFailed: posterFailed,
     broken: broken.slice(0, 5)
   };
 })()"""
@@ -144,8 +148,14 @@ async def run(ws_url: str, shot: Path, report: Report) -> None:
 
         print("render")
         s = await probe()
+        deadline = asyncio.get_running_loop().time() + 25
+        while s["posterPending"] and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.5)
+            s = await probe()
         report.check(s["screen"] == "home", "lands on home", f"screen={s['screen']}")
         report.check(s["focusable"] >= MIN_FOCUSABLE, "content rendered", f"{s['focusable']} focusable")
+        report.check(s["posterPending"] == 0, "poster loading settled", f"{s['posterPending']} pending")
+        report.check(s["posterFailed"] == 0, "no failed posters", f"{s['posterFailed']} failed")
         report.check(not s["broken"], "no broken images", f"{len(s['broken'])}/{s['images']} broken {s['broken']}")
         # Every screen must show exactly one focus ring at all times, including
         # before the first key press — otherwise the user has to press a

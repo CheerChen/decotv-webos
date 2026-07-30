@@ -103,15 +103,26 @@ export async function lunaFetch(baseUrl, path, options = {}) {
   return new LunaResponse(result);
 }
 
-// Poster bytes, fetched by the service straight from the image host. Base64
-// because Luna carries JSON, and because the service is jailed away from any
-// directory the webview is allowed to read from disk.
-export async function lunaFetchImage(url) {
-  const result = await serviceCall("fetchImage", { url }, { timeoutMs: 20000 });
+// Poster bytes, fetched through the service's authenticated proxy/cache
+// pipeline. Base64 is used because Luna carries JSON and the service's cache
+// directory is not readable by the webview.
+export async function lunaFetchImage(baseUrl, url) {
+  const result = await serviceCall(
+    "fetchImage",
+    { baseUrl, url },
+    // A confirmed proxy failure may be followed by a direct request. Each
+    // network leg has a 15-second service timeout, so the Luna caller must
+    // leave enough room for both legs to finish and report their real error.
+    { timeoutMs: 40000 }
+  );
   if (!result?.returnValue || !result.base64) {
     throw new Error(result?.error || "IMAGE_FETCH_FAILED");
   }
-  return { base64: result.base64, contentType: result.contentType || "image/jpeg" };
+  return {
+    base64: result.base64,
+    contentType: result.contentType || "image/jpeg",
+    source: result.source || ""
+  };
 }
 
 export async function getLunaSession(baseUrl) {
@@ -120,7 +131,8 @@ export async function getLunaSession(baseUrl) {
   return {
     available: true,
     hasSession: Boolean(result?.hasSession),
-    cookieKeys: Array.isArray(result?.cookieKeys) ? result.cookieKeys : []
+    cookieKeys: Array.isArray(result?.cookieKeys) ? result.cookieKeys : [],
+    images: result?.images || null
   };
 }
 

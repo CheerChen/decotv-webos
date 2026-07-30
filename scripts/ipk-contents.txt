@@ -14,6 +14,7 @@ js/core/network/decotvClient.js
 js/core/network/lunaTransport.js
 js/core/network/sourceRanking.js
 js/core/playback/stallDetector.js
+js/core/storage/librarySync.js
 js/core/storage/localLibrary.js
 js/core/storage/localStore.js
 js/platform/environment.js
@@ -21,6 +22,7 @@ js/ui/navigation/focusEngine.js
 js/ui/navigation/navHeader.js
 js/ui/navigation/router.js
 js/ui/navigation/screen.js
+js/ui/posterImage.js
 js/ui/screens/detail/detailScreen.js
 js/ui/screens/home/homeScreen.js
 js/ui/screens/library/libraryScreen.js
@@ -32,6 +34,8 @@ js/ui/screens/settings/settingsScreen.js
 js/ui/screens/splash/splashScreen.js
 js/ui/toast.js
 js/ui/utils.js
+service/com.cheerchen.decotv.service/imageCache.js
+service/com.cheerchen.decotv.service/imagePipeline.js
 service/com.cheerchen.decotv.service/package.json
 service/com.cheerchen.decotv.service/service.js
 service/com.cheerchen.decotv.service/services.json
