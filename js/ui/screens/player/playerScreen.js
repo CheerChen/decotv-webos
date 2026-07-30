@@ -22,6 +22,17 @@ import {
   nextStallState,
   isStalled
 } from "../../../core/playback/stallDetector.js";
+import {
+  initialAdSkipState,
+  observeAdSkip,
+  applyScanResult,
+  markScanRunning,
+  markScanFailed
+} from "../../../core/playback/adSkipDetector.js";
+import {
+  scanAdRanges,
+  isHlsPlayUrl
+} from "../../../core/playback/adSkipScanner.js";
 
 // Monochrome inline SVG glyphs (inherit button color via currentColor) —
 // replaces the colored system emoji that rendered as ugly yellow icons.
@@ -62,6 +73,8 @@ export const PlayerScreen = {
   _playToken: 0,          // race guard: each _playIndex call gets a token; stale async results are discarded
   _stall: null,           // stallDetector state; see _tick
   _stallArmed: false,     // only watch the clock once this load has actually played a frame
+  _adSkip: null,          // pre-scan ranges + live fallback; see adSkipDetector.js
+  _adScanAbort: null,     // AbortController for in-flight playlist pre-scan
 
   async mount(params = {}) {
     this.container = document.getElementById("player");
@@ -90,6 +103,8 @@ export const PlayerScreen = {
     this._playToken = 0;
     this._stall = initialStallState();
     this._stallArmed = false;
+    this._adSkip = initialAdSkipState();
+    this._adScanAbort = null;
 
     this.container.innerHTML = `
       <video id="videoPlayer" autoplay playsinline webkit-playsinline preload="auto"
@@ -215,6 +230,9 @@ export const PlayerScreen = {
     }
     this.index = idx;
     this.episodePanelIndex = idx;
+    // Fresh episode/source — cancel any prior ad pre-scan and start clean.
+    this._cancelAdScan();
+    this._adSkip = initialAdSkipState();
     const rawUrl = this.episodes[idx];
     this.container.querySelector("#playerLoading")?.classList.remove("hidden");
 
@@ -252,6 +270,47 @@ export const PlayerScreen = {
       playPromise.catch(() => { /* autoplay restriction — user must press play */ });
     }
     this._updateMeta();
+    // Background: probe discontinuity groups so mid-roll ads can be skipped in
+    // one seek. Does not block play — watch for startup jank from the extra GETs.
+    this._startAdScan(playUrl, token);
+  },
+
+  _cancelAdScan() {
+    if (this._adScanAbort) {
+      try { this._adScanAbort.abort(); } catch (_) {}
+      this._adScanAbort = null;
+    }
+  },
+
+  _startAdScan(playUrl, token) {
+    if (!isHlsPlayUrl(playUrl)) return;
+    this._cancelAdScan();
+    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    this._adScanAbort = ctrl;
+    this._adSkip = markScanRunning(this._adSkip || initialAdSkipState());
+    const started = Date.now();
+    scanAdRanges(playUrl, { signal: ctrl?.signal, concurrency: 2 })
+      .then((result) => {
+        if (token !== this._playToken) return;
+        this._adSkip = applyScanResult(this._adSkip || initialAdSkipState(), result);
+        console.info("[DecoTV] ad pre-scan", JSON.stringify({
+          ranges: result.ranges?.length || 0,
+          groups: result.groups,
+          probed: result.probed,
+          elapsedMs: result.elapsedMs,
+          baseline: result.baseline,
+          wallMs: Date.now() - started
+        }));
+      })
+      .catch((err) => {
+        if (token !== this._playToken) return;
+        if (err?.name === "AbortError") return;
+        this._adSkip = markScanFailed(this._adSkip || initialAdSkipState());
+        console.warn("[DecoTV] ad pre-scan failed", err?.message || err);
+      })
+      .finally(() => {
+        if (this._adScanAbort === ctrl) this._adScanAbort = null;
+      });
   },
 
   // Check if URL is already a direct media stream (m3u8/mp4/etc) that <video>
@@ -327,6 +386,34 @@ export const PlayerScreen = {
       if (now - this._lastSaveAt >= RECORD_SAVE_INTERVAL_MS) this._saveRecord();
     }
     this._checkStall(v);
+    this._checkAdSkip(v);
+  },
+
+  // Prefer pre-scanned ad ranges (one seek to range.end). Fall back to live
+  // videoWidth/Height outlier crawl only when the scan found nothing.
+  _checkAdSkip(v) {
+    if (this._isExiting || !this._adSkip) return;
+    const result = observeAdSkip(this._adSkip, {
+      w: v.videoWidth || 0,
+      h: v.videoHeight || 0,
+      currentTime: v.currentTime || 0,
+      duration: v.duration || 0,
+      paused: v.paused,
+      seeking: v.seeking,
+      ended: v.ended,
+      now: Date.now()
+    });
+    this._adSkip = result.state;
+    const action = result.action;
+    if (!action) return;
+    if (action.toast) showToast(action.toast, 2200);
+    if (action.type === "seek" && Number.isFinite(action.to)) {
+      if (action.to > (v.currentTime || 0) + 0.25) {
+        try {
+          v.currentTime = action.to;
+        } catch (_) { /* ignore seek errors on closed pipelines */ }
+      }
+    }
   },
 
   // Watch for playback that reports itself as running while the clock stands
@@ -852,6 +939,7 @@ export const PlayerScreen = {
   },
 
   cleanup() {
+    this._cancelAdScan();
     // Persist final position before tearing the video down.
     this._saveRecord(true);
     if (this.tickTimer) { clearInterval(this.tickTimer); this.tickTimer = null; }
