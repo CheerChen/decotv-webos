@@ -25,7 +25,8 @@ import {
   getQualityRank,
   getSourceProbeKey,
   isPlayableFallbackResult,
-  isVerifiedPlaybackResult
+  isVerifiedPlaybackResult,
+  rankSourcesByProbe
 } from "../../../core/network/sourceRanking.js";
 
 const PROBE_TIMEOUT_MS = 8000;
@@ -551,14 +552,7 @@ export const DetailScreen = {
       return;
     }
     // Sort a copy by probe result quality (best first), keep unprobed at end by source order.
-    const ranked = [...this.sources].sort((a, b) => {
-      const ra = this.probeResults.get(getSourceProbeKey(a));
-      const rb = this.probeResults.get(getSourceProbeKey(b));
-      if (!ra && !rb) return 0;
-      if (!ra) return 1;
-      if (!rb) return -1;
-      return comparePlaybackMetrics(ra, rb);
-    });
+    const ranked = rankSourcesByProbe(this.sources, this.probeResults);
     const items = ranked.map((src) => {
       const key = getSourceProbeKey(src);
       const r = this.probeResults.get(key);

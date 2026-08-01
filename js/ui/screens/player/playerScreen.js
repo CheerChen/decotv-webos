@@ -12,10 +12,10 @@ import { escapeHtml, escapeAttr, formatTime } from "../../utils.js";
 // How often playback progress is persisted to /api/playrecords while watching.
 const RECORD_SAVE_INTERVAL_MS = 10000;
 import {
-  comparePlaybackMetrics,
   getSourceProbeKey,
-  isPlayableFallbackResult,
-  isVerifiedPlaybackResult
+  isVerifiedPlaybackResult,
+  rankSourcesByProbe,
+  pickBestAvailableSource
 } from "../../../core/network/sourceRanking.js";
 import {
   initialStallState,
@@ -529,11 +529,13 @@ export const PlayerScreen = {
     const failedCount = this.failedSourceKeys.size;
     const total = this.allSources.length;
     console.error(`[DecoTV] ${errLabel} on "${srcName}" (${failedCount}/${total} failed)`, debug);
-    // Find next source that hasn't failed yet.
-    const next = this.allSources.find((s) => {
-      const key = getSourceProbeKey(s);
-      return !this.failedSourceKeys.has(key);
-    });
+    // Search order is not a quality ranking. Pick the best measured source
+    // that has not failed instead of taking the first remaining result.
+    const next = pickBestAvailableSource(
+      this.allSources,
+      this.probeResults,
+      this.failedSourceKeys
+    );
     if (next) {
       const key = getSourceProbeKey(next);
       showToast(`${errLabel} · ${srcName} → 换源`);
@@ -613,14 +615,7 @@ export const PlayerScreen = {
   _renderSourcePanel() {
     this.container.querySelector("#playerSourcePanel")?.remove();
     // Sort sources by probe result (best first), unprobed at end.
-    const ranked = [...this.allSources].sort((a, b) => {
-      const ra = this.probeResults.get(getSourceProbeKey(a));
-      const rb = this.probeResults.get(getSourceProbeKey(b));
-      if (!ra && !rb) return 0;
-      if (!ra) return 1;
-      if (!rb) return -1;
-      return comparePlaybackMetrics(ra, rb);
-    });
+    const ranked = rankSourcesByProbe(this.allSources, this.probeResults);
     const panel = document.createElement("div");
     panel.id = "playerSourcePanel";
     panel.className = "player-side-panel";

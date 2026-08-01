@@ -87,3 +87,40 @@ export function comparePlaybackMetrics(a, b) {
 export function getSourceProbeKey(source) {
   return `${source.source}-${source.id}`;
 }
+
+// Return a copy ordered the same way the source lists are displayed: measured
+// sources first, then the best probe result first, with unprobed sources left
+// in their original order at the end. The original array is never mutated.
+export function rankSourcesByProbe(sources, probeResults = new Map()) {
+  const results = probeResults instanceof Map ? probeResults : new Map();
+  return (Array.isArray(sources) ? sources : [])
+    .map((source, index) => ({ source, index }))
+    .sort((a, b) => {
+      const ra = results.get(getSourceProbeKey(a.source));
+      const rb = results.get(getSourceProbeKey(b.source));
+      let order = 0;
+      if (!ra && !rb) order = 0;
+      else if (!ra) order = 1;
+      else if (!rb) order = -1;
+      else order = comparePlaybackMetrics(ra, rb);
+      // Do not rely on the webOS webview's sort stability for equal metrics or
+      // unprobed sources: preserve search order explicitly as the tie-breaker.
+      return order || a.index - b.index;
+    })
+    .map(({ source }) => source);
+}
+
+// Choose the highest-ranked source that has not failed at runtime. This is
+// deliberately separate from the source array order: search results are not a
+// quality ranking, so using `sources.find(...)` would make failover arbitrary.
+export function pickBestAvailableSource(
+  sources,
+  probeResults = new Map(),
+  failedSourceKeys = new Set()
+) {
+  const failed = failedSourceKeys instanceof Set
+    ? failedSourceKeys
+    : new Set(failedSourceKeys || []);
+  return rankSourcesByProbe(sources, probeResults)
+    .find((source) => !failed.has(getSourceProbeKey(source))) || null;
+}
