@@ -169,6 +169,9 @@ ssh root@TV 'sync; reboot'   # 首次安装需重启，sam 才会注册应用
 ## 开发
 
 ```bash
+# 首次 clone 后初始化 webos-tv-kit 子模块（打包与 CDP 调试脚本在其中）
+git submodule update --init
+
 # 单元测试
 npm test
 
@@ -177,12 +180,14 @@ npm test
 # 将 TV 换成电视局域网 IP 或 SSH 主机名
 scp -r js css index.html root@TV:/media/developer/apps/usr/palm/applications/com.cheerchen.decotv/
 # CDP 隧道示例：ssh -f -N -L 9977:localhost:9998 root@TV
-uv run scripts/cdp_reload.py
+uv run tvkit/scripts/cdp_reload.py --target decotv
 ```
 
 应用 ID：`com.cheerchen.decotv`。
 
-可选调试脚本：`scripts/cdp_eval.py`、`scripts/cdp_reload.py`、`scripts/cdp_screenshot.py`。
+调试脚本位于 [webos-tv-kit](https://github.com/CheerChen/webos-tv-kit)（`tvkit/scripts/`）：
+`cdp_eval.py`、`cdp_reload.py`、`cdp_screenshot.py`、`cdp_net.py`、`cdp_keys.py`、`tv_luna.py`，
+统一 `--target` / `--port` 参数；部署后冒烟测试 `scripts/tv_smoke.py` 仍在本仓库。
 
 ---
 

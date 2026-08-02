@@ -169,6 +169,9 @@ Or package locally:
 ## Development
 
 ```bash
+# once after cloning: init the webos-tv-kit submodule (build + CDP tooling)
+git submodule update --init
+
 npm test
 
 # Hot-update (rooted / already installed): push frontend sources + CDP reload, no repackage
@@ -176,12 +179,15 @@ npm test
 # Replace TV with LAN IP or SSH host alias
 scp -r js css index.html root@TV:/media/developer/apps/usr/palm/applications/com.cheerchen.decotv/
 # CDP tunnel example: ssh -f -N -L 9977:localhost:9998 root@TV
-uv run scripts/cdp_reload.py
+uv run tvkit/scripts/cdp_reload.py --target decotv
 ```
 
 App ID: `com.cheerchen.decotv`.
 
-Helpers: `scripts/cdp_eval.py`, `scripts/cdp_reload.py`, `scripts/cdp_screenshot.py`.
+Debug tooling lives in [webos-tv-kit](https://github.com/CheerChen/webos-tv-kit) (`tvkit/scripts/`):
+`cdp_eval.py`, `cdp_reload.py`, `cdp_screenshot.py`, `cdp_net.py`, `cdp_keys.py`, `tv_luna.py`,
+all behind uniform `--target` / `--port` flags; the post-deploy smoke test `scripts/tv_smoke.py`
+stays in this repo.
 
 ---
 

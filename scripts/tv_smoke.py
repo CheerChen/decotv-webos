@@ -34,6 +34,8 @@ from pathlib import Path
 
 MIN_FOCUSABLE = 20
 SCRIPT_DIR = Path(__file__).resolve().parent
+APP_ID = "com.cheerchen.decotv"
+TV_LUNA = SCRIPT_DIR.parent / "tvkit" / "scripts" / "tv_luna.py"
 
 KEYS = {
     "up": (38, "ArrowUp", "ArrowUp"),
@@ -199,7 +201,7 @@ def main() -> None:
     if args.relaunch:
         print("relaunching…")
         subprocess.run(
-            [sys.executable, str(SCRIPT_DIR / "tv_luna.py"), "--relaunch"],
+            [sys.executable, str(TV_LUNA), "--relaunch", APP_ID],
             check=True, capture_output=True,
         )
 
@@ -208,7 +210,7 @@ def main() -> None:
         print(
             f"ERROR: no CDP target matching {args.target!r} on localhost:{args.port}\n"
             f"  Tunnel: ssh -f -N -L {args.port}:localhost:9998 lgtv\n"
-            f"  Launch: uv run scripts/tv_luna.py --relaunch",
+            f"  Launch: uv run tvkit/scripts/tv_luna.py --relaunch {APP_ID}",
             file=sys.stderr,
         )
         sys.exit(1)

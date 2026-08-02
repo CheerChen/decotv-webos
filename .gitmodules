@@ -1,0 +1,3 @@
+[submodule "tvkit"]
+	path = tvkit
+	url = https://github.com/CheerChen/webos-tv-kit.git
