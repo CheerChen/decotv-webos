@@ -34,6 +34,7 @@ export const AuthManager = {
   state: null,
   serverConfig: null,
   loggedInUser: null,   // real logged-in username, or null when browsing anonymously
+  _accountSession: false, // a server-verified account session exists (see hasAccountSession)
   _ensuring: null,      // in-flight ensureSession promise (dedupes concurrent 401s)
   subscribers: new Set(),
 
@@ -86,6 +87,17 @@ export const AuthManager = {
     return Boolean(this.loggedInUser);
   },
 
+  // A server-verified account session exists — via the persisted cookie or a
+  // credential login — as opposed to browsing anonymously. Distinct from
+  // isLoggedIn(): the auth cookie lives in the JS service's store on
+  // /media/internal and outlives the webview's localStorage (wiped by a
+  // reinstall), so a session can be valid while the stored credentials — and
+  // with them the username — are gone. Anything gated on "is there a
+  // server-side library to sync with" must use this, not isLoggedIn().
+  hasAccountSession() {
+    return this._accountSession;
+  },
+
   // Server allows browsing without a real account (public / single-user local).
   canBrowseAnonymously() {
     const storageType = String(this.serverConfig?.StorageType || "").toLowerCase();
@@ -132,16 +144,22 @@ export const AuthManager = {
   // an accepted one counts.
   async _establishSession({ ignorePersisted = false } = {}) {
     this.loggedInUser = null;
+    this._accountSession = false;
     try {
       const creds = this.getStoredCredentials();
       if (!ignorePersisted && await api.hasPersistedSession() && await api.verifySession()) {
+        // The cookie proves the account session even when the credentials are
+        // gone (reinstall wipes localStorage, not the service's cookie store)
+        // — the username is simply unknown then.
         this.loggedInUser = creds?.username || null;
+        this._accountSession = true;
         return true;
       }
       if (creds?.password) {
         await api.login(creds.username, creds.password);
         if (await api.verifySession()) {
           this.loggedInUser = creds.username || null;
+          this._accountSession = true;
           return true;
         }
       }
@@ -200,6 +218,7 @@ export const AuthManager = {
       }
       this.setStoredCredentials({ username, password });
       this.loggedInUser = username;
+      this._accountSession = true;
       const cfg = this.serverConfig || await api.getServerConfig();
       this.serverConfig = cfg;
       this._setState(AuthState.AUTHENTICATED, { serverConfig: cfg });
@@ -212,6 +231,7 @@ export const AuthManager = {
   async skipLogin() {
     this._setState(AuthState.LOADING);
     this.loggedInUser = null;
+    this._accountSession = false;
     try { await api.login(undefined, undefined); } catch (e) { /* browsing still works */ }
     this._setState(AuthState.AUTHENTICATED, { serverConfig: this.serverConfig });
   },
@@ -223,6 +243,7 @@ export const AuthManager = {
     // Forget the account but keep the server — drop back to anonymous browsing.
     this.setStoredCredentials(null);
     this.loggedInUser = null;
+    this._accountSession = false;
     if (this.canBrowseAnonymously()) {
       try { await api.login(undefined, undefined); } catch (e) { /* ignore */ }
       this._setState(AuthState.AUTHENTICATED, { serverConfig: this.serverConfig });

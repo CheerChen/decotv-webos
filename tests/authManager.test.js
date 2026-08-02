@@ -42,6 +42,7 @@ beforeEach(() => {
   store.set("decotv.lang", '"en"');
   AuthManager.serverConfig = null;
   AuthManager.loggedInUser = null;
+  AuthManager._accountSession = false;
   AuthManager._ensuring = null;
   api.setBaseUrl(SERVER_A);
 });
@@ -122,8 +123,41 @@ describe("a session only counts once the server accepts it", () => {
   test("stale loggedInUser is cleared rather than left behind", async () => {
     stubApi({ hasCookie: false, sessionValid: false });
     AuthManager.loggedInUser = "someone";
+    AuthManager._accountSession = true;
     await AuthManager._establishSession();
     assert.equal(AuthManager.loggedInUser, null);
+    assert.equal(AuthManager.hasAccountSession(), false);
+  });
+});
+
+describe("an account session is not the same as knowing the username", () => {
+  // The auth cookie lives in the JS service's store on /media/internal and
+  // survives a reinstall; the credentials live in webview localStorage and do
+  // not. Gating sync on isLoggedIn() in that state silently disabled it
+  // despite a session the server still honoured.
+  test("a valid cookie with the credentials gone still counts as an account session", async () => {
+    stubApi({ hasCookie: true, sessionValid: true });
+    assert.equal(await AuthManager._establishSession(), true);
+    assert.equal(AuthManager.loggedInUser, null, "the username is unknown");
+    assert.equal(AuthManager.isLoggedIn(), false);
+    assert.equal(AuthManager.hasAccountSession(), true, "but the session is real");
+  });
+
+  test("anonymous browsing on a public server is not an account session", async () => {
+    stubApi({ config: PUBLIC_MODE, sessionValid: false });
+    AuthManager.serverConfig = PUBLIC_MODE;
+    assert.equal(await AuthManager._establishSession(), true);
+    assert.equal(AuthManager.hasAccountSession(), false);
+  });
+
+  test("logout drops the account session", async () => {
+    stubApi({ config: PASSWORD_MODE, sessionValid: true });
+    api.logout = async () => {};
+    await AuthManager.loginWithCredentials("pi", "secret");
+    assert.equal(AuthManager.hasAccountSession(), true);
+    AuthManager.serverConfig = PASSWORD_MODE;
+    await AuthManager.logout();
+    assert.equal(AuthManager.hasAccountSession(), false);
   });
 });
 

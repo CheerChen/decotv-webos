@@ -54,13 +54,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     AuthManager.ensureSession();
   });
 
-  // Library mirroring is tied to having a real account: anonymous browsing on a
-  // public server has no server-side library to sync with, and every call would
-  // 401. isLoggedIn is passed as a callback rather than imported inside
-  // librarySync so that module stays free of auth state and unit-testable.
+  // Library mirroring is tied to having an account session: anonymous browsing
+  // on a public server has no server-side library to sync with, and every call
+  // would 401. Gated on hasAccountSession, NOT isLoggedIn — the service's auth
+  // cookie survives a reinstall while the stored credentials do not, and that
+  // combination used to silently disable sync despite a valid session. Passed
+  // as a callback rather than imported inside librarySync so that module stays
+  // free of auth state and unit-testable.
   LibrarySync.configure({
     api,
-    isEnabled: () => AuthManager.isLoggedIn(),
+    isEnabled: () => AuthManager.hasAccountSession(),
     onPulled: () => Router.getCurrentScreen()?.refreshLibraryData?.()
   });
 
