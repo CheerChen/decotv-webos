@@ -20,41 +20,17 @@ import { showToast } from "../../toast.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
 import { escapeHtml } from "../../utils.js";
 import { posterAttrs, hydratePosters } from "../../posterImage.js";
+import { renderProbeCell } from "../../probeLabel.js";
 import {
-  comparePlaybackMetrics,
-  getQualityRank,
   getSourceProbeKey,
-  isPlayableFallbackResult,
-  isVerifiedPlaybackResult,
   rankSourcesByProbe
 } from "../../../core/network/sourceRanking.js";
-
-const PROBE_TIMEOUT_MS = 8000;
-// Probes are latency-bound on the upstream CDN, not on the DecoTV server, so
-// widening the pool is close to free: 8 in flight was measured costing the same
-// wall time as 3 while covering 2.7x as many sources. Kept below the point
-// where sources start contending for bandwidth and skewing their own speedKBps
-// (the secondary ranking key), which showed up clearly at 34-way concurrency.
-const PREFER_CONCURRENCY = 8;
-// Soft deadline: stop making the user wait and play the best candidate so far.
-// Does NOT stop probing.
-const PREFER_MAX_WAIT_MS = 12000;
-// Hard deadline: the single point where outstanding probes are abandoned.
-// Sized so a source-rich title (30+) can finish in the background and leave a
-// fully measured source list behind for when the user comes back.
-const PREFER_BACKGROUND_MAX_MS = 60000;
-// Minimum number of verified probe results before auto-play kicks in.
-// The probe keeps running in the background after this threshold is met so
-// the source list fills in with real speed/latency for every source.
-// 4 rather than 3: replaying captured probe arrivals showed 3 settling for a
-// 720p source 125ms before a 1080p one at 10x the throughput arrived. Beyond 4
-// the pick stopped changing, so the extra wait buys nothing.
-const PREFER_MIN_VERIFIED_FOR_AUTOPLAY = 4;
-// Resolution that ends the wait on its own. Quality is the primary ranking key
-// and comes straight from the manifest, so once a source this good is verified
-// further probing can only refine the speed tie-break. Measured ~1s faster to
-// first frame than waiting for the count on titles whose probes are slow.
-const PREFER_QUALITY_SHORTCUT_RANK = 1080;
+import {
+  getPreferCache,
+  pickBestPreferSource,
+  runPreferEngine,
+  savePreferCache
+} from "../../../core/network/preferEngine.js";
 
 // Monochrome play glyph for the primary action (inherits color via currentColor).
 const PLAY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
@@ -64,27 +40,6 @@ const PLAY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l
 // "continue watching" resumes by title regardless of which source was used.
 function recordKeyFor(source) {
   return LocalLibrary.recordKeyForTitle(source.title || source.search_title, source.year);
-}
-
-// Session cache of the last prefer-mode search+probe result, so returning to a
-// detail page (e.g. Back from the player) is instant and does NOT re-search or
-// auto-play — it restores the sources, probe metrics and chosen source as-is.
-let preferCache = null; // { key, sources, probeResults:[[k,v]], currentSourceKey }
-
-function normalizeTitle(s) {
-  return String(s || "").replaceAll(" ", "").toLowerCase();
-}
-
-function matchesYear(candidateYear, requestedYear) {
-  const y = String(requestedYear || "").trim();
-  const cy = String(candidateYear || "").trim();
-  if (!y || !cy) return true;
-  return cy.includes(y) || y.includes(cy);
-}
-
-function inferSearchType(episodes) {
-  if (!Array.isArray(episodes)) return null;
-  return episodes.length > 1 ? "tv" : "movie";
 }
 
 export const DetailScreen = {
@@ -162,9 +117,9 @@ export const DetailScreen = {
 
     // Fast path: returning to a detail we already searched — restore from cache,
     // no re-search, no re-probe, no auto-play.
-    const ck = `p:${this.title}|${this.year}`;
-    if (fromHistory && preferCache && preferCache.key === ck && preferCache.sources.length) {
-      this._restoreFromCache();
+    const cached = getPreferCache(this.title, this.year);
+    if (fromHistory && cached) {
+      this._restoreFromCache(cached);
       return;
     }
 
@@ -175,27 +130,22 @@ export const DetailScreen = {
     this._saveCache();
   },
 
-  _cacheKey() {
-    return this.mode === "single" && this.currentSource
-      ? `s:${getSourceProbeKey(this.currentSource)}`
-      : `p:${this.title}|${this.year}`;
-  },
-
   _saveCache() {
     if (this.mode !== "prefer" || !this.sources.length) return;
-    preferCache = {
-      key: `p:${this.title}|${this.year}`,
+    savePreferCache({
+      title: this.title,
+      year: this.year,
       sources: this.sources,
-      probeResults: Array.from(this.probeResults.entries()),
-      currentSourceKey: this.currentSource ? getSourceProbeKey(this.currentSource) : ""
-    };
+      probeResults: this.probeResults,
+      currentSourceKey: this.currentSource ? getSourceProbeKey(this.currentSource) : "",
+    });
   },
 
-  _restoreFromCache() {
-    this.sources = preferCache.sources;
-    this.probeResults = new Map(preferCache.probeResults);
+  _restoreFromCache(cache) {
+    this.sources = cache.sources;
+    this.probeResults = new Map(cache.probeResults);
     this.currentSource = this.sources.find(
-      (s) => getSourceProbeKey(s) === preferCache.currentSourceKey
+      (s) => getSourceProbeKey(s) === cache.currentSourceKey
     ) || this.sources[0];
     this._renderHeroMeta();
     this._maybeFetchDetail();
@@ -205,11 +155,7 @@ export const DetailScreen = {
     this._updatePlayButton();
     this._updateFavoriteButton();
     const playBtn = this.container.querySelector('.btn[data-action="play"]');
-    if (playBtn) {
-      this.container.querySelectorAll(".focused").forEach((n) => n.classList.remove("focused"));
-      playBtn.classList.add("focused");
-      playBtn.focus();
-    }
+    if (playBtn) ScreenUtils.setFocus(playBtn, this.container);
     // Sources the previous visit never got to (auto-play moved the user into
     // the player mid-run) are measured now, so the list eventually shows real
     // metrics for every source. Fire and forget — the cached pick stands.
@@ -292,14 +238,6 @@ export const DetailScreen = {
     const r = this.currentSource;
     const on = r ? LocalLibrary.isFavorited(`${r.source}+${r.id}`) : false;
     btn.textContent = on ? "已收藏" : "收藏";
-  },
-
-  // Best candidate with the measurements available right now — lets the play
-  // button work mid-probe. A wrong pick is cheap: the player auto-fails-over.
-  _bestSourceNow() {
-    if (!this.sources.length) return null;
-    const ranked = rankSourcesByProbe(this.sources, this.probeResults);
-    return ranked[0] || this.sources[0];
   },
 
   // Update hero poster when a better cover arrives (history entry without
@@ -386,222 +324,113 @@ export const DetailScreen = {
   },
 
   async _searchAndPrefer() {
-    const epoch = this._mountEpoch;
     this._setStatus("🔍 正在搜索播放源…");
     try {
-      const data = await api.searchVideos(this.title);
-      if (epoch !== this._mountEpoch) return; // stale — newer mount won
-      const all = Array.isArray(data?.results) ? data.results : [];
-      const searchType = all.length ? inferSearchType(all[0].episodes) : null;
-      this.sources = all.filter((r) => {
-        if (normalizeTitle(r.title) !== normalizeTitle(this.title)) return false;
-        if (!matchesYear(r.year, this.year)) return false;
-        if (searchType === "tv" && r.episodes.length <= 1) return false;
-        if (searchType === "movie" && r.episodes.length !== 1) return false;
-        return true;
-      });
-      if (!this.sources.length) {
-        // Fallback: relax the type constraint — some sources mislabel.
-        this.sources = all.filter((r) =>
-          normalizeTitle(r.title) === normalizeTitle(this.title)
-          && matchesYear(r.year, this.year)
-        );
-      }
-      if (!this.sources.length) {
-        this._setStatus("未找到匹配的播放源");
-        this.container.querySelector("#sourceList").innerHTML = `<div class="empty-state">没有「${escapeHtml(this.title)}」的可用源</div>`;
-        return;
-      }
-      // Fill missing cover + hero meta from the first search hit that has data.
-      if (!this.poster) {
-        const withPoster = this.sources.find((s) => s.poster);
-        if (withPoster?.poster) this._setPoster(withPoster.poster);
-      }
-      if (!this.currentSource && this.sources[0]) {
-        // Tentative source for meta only; probe will reassign the real pick.
-        this.currentSource = this.sources[0];
-      }
-      this._renderHeroMeta();
-      this._renderSourceList();
-      await this._probeAndPick();
+      await this._runPreferEngine();
     } catch (e) {
       this._setStatus(`搜索失败：${escapeHtml(e?.message || e)}`);
     }
   },
 
-  // reselect:false leaves the current source alone and only fills in metrics —
-  // used when resuming a run that an earlier visit left unfinished.
+  // Run a probe-only continuation when a cached detail page has missing metrics.
   async _probeAndPick({ reselect = true } = {}) {
     if (!this.sources.length) return;
-    // Probe only what has no result yet, so a resumed run picks up where the
-    // previous one stopped instead of re-measuring everything.
-    const pending = this.sources.filter((s) => !this.probeResults.has(getSourceProbeKey(s)));
-    if (!pending.length) return;
+    await this._runPreferEngine({
+      reselect,
+      initialSources: this.sources,
+      existingProbeResults: this.probeResults,
+    });
+  },
+
+  async _runPreferEngine({
+    reselect = true,
+    initialSources = null,
+    existingProbeResults = new Map(),
+  } = {}) {
     const epoch = this._mountEpoch;
-    this.probeRunning = true;
-    this.probeTotal = this.sources.length;
-    this.probeDone = this.probeTotal - pending.length;
-    this._setStatus(`⚡ 正在优选最佳播放源…（${this.probeDone}/${this.probeTotal}）`);
-
-    // No short-circuit abort: every source is probed so the source list shows
-    // real speed/latency for all of them. autoPlay fires once after at least
-    // PREFER_MIN_VERIFIED_FOR_AUTOPLAY verified results are in (or when all
-    // probes finish if fewer than that verify). Two deadlines, deliberately
-    // separate: the soft one only forces the auto-play decision, the hard one
-    // is the sole point where in-flight probes are actually abandoned.
-    const controller = new AbortController();
-    const hardDeadline = setTimeout(() => controller.abort(), PREFER_BACKGROUND_MAX_MS);
-    const results = [];
-    let nextIndex = 0;
-    let verifiedCount = 0;
-    let autoPlayFired = false;
-    let autoPlayDeadlineReached = false;
-    let qualityShortcutHit = false;
-
-    const probeOne = async (source) => {
-      const key = getSourceProbeKey(source);
-      const episodeUrl = source.episodes?.[this.episodeIndex];
-      if (!episodeUrl) {
-        const fail = { hasError: true, status: "failed", failureKind: "empty", message: "没有可用播放地址" };
-        this.probeResults.set(key, fail);
-        return { source, testResult: fail };
-      }
-      try {
-        const probe = await api.probePlayback(episodeUrl, source.source, PROBE_TIMEOUT_MS, controller.signal);
-        if (epoch !== this._mountEpoch) return { source, testResult: { stale: true } }; // stale
-        this.probeResults.set(key, probe);
-        return { source, testResult: probe };
-      } catch (e) {
-        if (epoch !== this._mountEpoch) return { source, testResult: { stale: true } }; // stale
-        if (controller.signal.aborted) {
-          // Deadline abort — record a timeout-style failure, not a crash.
-          const fail = { hasError: true, status: "failed", failureKind: "timeout", message: "测速超时" };
-          this.probeResults.set(key, fail);
-          return { source, testResult: fail };
+    return runPreferEngine({
+      title: this.title,
+      year: this.year,
+      episodeIndex: this.episodeIndex,
+      autoPlay: reselect ? this.autoPlay : false,
+      reselect,
+      initialSources,
+      existingProbeResults,
+      searchVideos: (title) => api.searchVideos(title),
+      probePlayback: (...args) => api.probePlayback(...args),
+      isStale: () => epoch !== this._mountEpoch,
+      canAutoPlay: () => !this.preferCancelled,
+      onSources: ({ sources, probeResults }) => {
+        this.sources = sources;
+        this.probeResults = probeResults;
+        this.probeRunning = Boolean(sources.length);
+        this.probeTotal = sources.length;
+        this.probeDone = Array.from(probeResults.keys()).length;
+        if (!sources.length) {
+          this._setStatus("未找到匹配的播放源");
+          this.container.querySelector("#sourceList").innerHTML = `<div class="empty-state">没有「${escapeHtml(this.title)}」的可用源</div>`;
+          return;
         }
-        const fail = { hasError: true, status: "failed", failureKind: "unknown", message: String(e?.message || e) };
-        this.probeResults.set(key, fail);
-        return { source, testResult: fail };
-      }
-    };
-
-    const maybeAutoPlay = (bestSoFar) => {
-      if (autoPlayFired || !this.autoPlay || this.preferCancelled) return;
-      if (epoch !== this._mountEpoch) return; // stale — don't start playback on wrong movie
-      if (verifiedCount < PREFER_MIN_VERIFIED_FOR_AUTOPLAY
-        && this.probeDone < this.probeTotal
-        && !autoPlayDeadlineReached
-        && !qualityShortcutHit) return;
-      autoPlayFired = true;
-      // Pick the best among results so far, then start playback.
-      const verified = results.filter((r) => isVerifiedPlaybackResult(r.testResult));
-      const selectable = verified.length ? verified
-        : results.filter((r) => isPlayableFallbackResult(r.testResult));
-      const best = selectable.length
-        ? selectable.sort((a, b) => comparePlaybackMetrics(a.testResult, b.testResult))[0].source
-        : bestSoFar || this.sources[0];
-      this.currentSource = best;
-      this._renderSourceList();
-      this._renderEpisodes();
-      this._setStatus(`✨ 已选「${escapeHtml(best.source_name || best.source)}」，准备播放`);
-      // Fire and forget — do NOT await. Awaiting would block the worker from
-      // probing the remaining sources. _startPlayback navigates to the player,
-      // but the probe workers keep running in the background (they only hold
-      // probeResults + the closure; detail.cleanup sets preferCancelled but
-      // does not abort the in-flight fetches), so the source list fills in
-      // with real data for when the user returns to detail.
-      this._startPlayback(best, this.episodeIndex, { preferResume: true });
-    };
-
-    // Soft deadline: force the auto-play decision with whatever has arrived.
-    // Probing deliberately keeps running afterwards.
-    const softDeadline = setTimeout(() => {
-      autoPlayDeadlineReached = true;
-      maybeAutoPlay(null);
-    }, PREFER_MAX_WAIT_MS);
-
-    const worker = async () => {
-      while (!controller.signal.aborted) {
-        if (epoch !== this._mountEpoch) return; // stale — newer mount won
-        const i = nextIndex++;
-        if (i >= pending.length) return;
-        const r = await probeOne(pending[i]);
-        if (r.testResult?.stale) return; // stale — bail
-        results.push(r);
-        this.probeDone++;
-        if (isVerifiedPlaybackResult(r.testResult) && (r.testResult.startupTimeMs || Infinity) <= PROBE_TIMEOUT_MS) {
-          verifiedCount++;
+        // Fill missing cover + hero meta from the first search hit that has data.
+        if (!this.poster) {
+          const withPoster = sources.find((s) => s.poster);
+          if (withPoster?.poster) this._setPoster(withPoster.poster);
         }
-        // A source this good ends the wait by itself — see the constant.
-        if (isVerifiedPlaybackResult(r.testResult)
-          && getQualityRank(r.testResult) >= PREFER_QUALITY_SHORTCUT_RANK) {
-          qualityShortcutHit = true;
-        }
-        this._setStatus(`⚡ 正在优选最佳播放源…（${this.probeDone}/${this.probeTotal}）`);
+        if (!this.currentSource && sources[0]) this.currentSource = sources[0];
+        this._renderHeroMeta();
         this._renderSourceList();
-        // Persist probe results incrementally so a later detail re-mount
-        // (e.g. after player exits) can restore them via _restoreFromCache
-        // instead of starting from zero.
+      },
+      onProgress: ({ sources, probeResults, done, total }) => {
+        if (epoch !== this._mountEpoch) return;
+        this.sources = sources;
+        this.probeResults = probeResults;
+        this.probeRunning = true;
+        this.probeDone = done;
+        this.probeTotal = total;
+        this._setStatus(`⚡ 正在优选最佳播放源…（${done}/${total}）`);
+        this._renderSourceList();
         this._saveCache();
-        // Trigger auto-play once we have enough verified results (or all
-        // probes are done with fewer). Background probes continue filling in.
-        maybeAutoPlay(r.source);
-      }
-    };
-
-    await Promise.all(Array.from({ length: Math.min(PREFER_CONCURRENCY, pending.length) }, () => worker()));
-    clearTimeout(hardDeadline);
-    clearTimeout(softDeadline);
-    if (epoch !== this._mountEpoch) return; // stale — don't finalize on wrong movie
-    this.probeRunning = false;
-
-    // Final selection ranks every result held, including ones carried in from a
-    // previous visit, not just the sources this run happened to probe.
-    const all = this.sources
-      .map((source) => ({ source, testResult: this.probeResults.get(getSourceProbeKey(source)) }))
-      .filter((r) => r.testResult);
-    const verified = all.filter((r) => isVerifiedPlaybackResult(r.testResult));
-    const selectable = verified.length ? verified
-      : all.filter((r) => isPlayableFallbackResult(r.testResult));
-    let best;
-    if (selectable.length) {
-      selectable.sort((a, b) => comparePlaybackMetrics(a.testResult, b.testResult));
-      best = selectable[0].source;
-    } else {
-      best = this.sources[0];
-    }
-    if (reselect) {
-      this.currentSource = best;
-      if (best?.poster) this._setPoster(best.poster);
-      this._renderHeroMeta();
-    }
-    this._renderSourceList();
-    this._renderEpisodes();
-    this._maybeFetchDetail();
-    this._saveCache();
-    this._setStatus(reselect
-      ? `✨ 已选「${escapeHtml(best.source_name || best.source)}」，准备播放`
-      : `已选「${escapeHtml(this.currentSource?.source_name || this.currentSource?.source || "")}」`);
-    this._updatePlayButton();
-    this._updateFavoriteButton();
-    // Probing now outlives the detail screen: auto-play may already have moved
-    // the user into the player, and a resumed run finishes while they are
-    // browsing the source list. Only grab focus for a fresh run that the user
-    // is actually waiting on, only while detail is the visible route, and only
-    // if the user has not already moved focus elsewhere (episodes/sources).
-    if (reselect && Router.current === "detail") {
-      const focusedNow = this.container.querySelector(".focused");
-      const playBtn = this.container.querySelector('.btn[data-action="play"]');
-      if (playBtn && (!focusedNow || focusedNow === playBtn)) {
-        this.container.querySelectorAll(".focused").forEach((n) => n.classList.remove("focused"));
-        playBtn.classList.add("focused");
-        playBtn.focus();
-      }
-    }
-    // If auto-play already fired above, don't start again. Otherwise fire now.
-    if (!autoPlayFired && this.autoPlay && !this.preferCancelled) {
-      await this._startPlayback(best, this.episodeIndex, { preferResume: true });
-    }
+      },
+      onPick: ({ source }) => {
+        if (epoch !== this._mountEpoch || this.preferCancelled) return;
+        this.currentSource = source;
+        this._renderSourceList();
+        this._renderEpisodes();
+        this._setStatus(`✨ 已选「${escapeHtml(source.source_name || source.source)}」，准备播放`);
+        // Do not await: background workers must continue filling probe metrics.
+        this._startPlayback(source, this.episodeIndex, { preferResume: true });
+      },
+      onDone: ({ sources, probeResults, best, reselect: shouldReselect }) => {
+        if (epoch !== this._mountEpoch || !best) return;
+        this.sources = sources;
+        this.probeResults = probeResults;
+        this.probeRunning = false;
+        this.probeDone = this.probeTotal;
+        if (shouldReselect) {
+          this.currentSource = best;
+          if (best.poster) this._setPoster(best.poster);
+          this._renderHeroMeta();
+        }
+        this._renderSourceList();
+        this._renderEpisodes();
+        this._maybeFetchDetail();
+        this._saveCache();
+        this._setStatus(shouldReselect
+          ? `✨ 已选「${escapeHtml(best.source_name || best.source)}」，准备播放`
+          : `已选「${escapeHtml(this.currentSource?.source_name || this.currentSource?.source || "")}」`);
+        this._updatePlayButton();
+        this._updateFavoriteButton();
+        // Keep the primary action focused only for a fresh run still visible
+        // on detail and only when the user has not moved elsewhere.
+        if (shouldReselect && Router.current === "detail") {
+          const focusedNow = this.container.querySelector(".focused");
+          const playBtn = this.container.querySelector('.btn[data-action="play"]');
+          if (playBtn && (!focusedNow || focusedNow === playBtn)) {
+            ScreenUtils.setFocus(playBtn, this.container);
+          }
+        }
+      },
+    });
   },
 
   _renderSourceList() {
@@ -632,20 +461,7 @@ export const DetailScreen = {
   },
 
   _renderProbeCell(r) {
-    if (!r) return `<span class="probe-pending">待测速</span>`;
-    if (r.hasError || r.status === "failed") {
-      return `<span class="probe-failed">✕ ${escapeHtml(r.message || "失败").slice(0, 24)}</span>`;
-    }
-    if (isVerifiedPlaybackResult(r)) {
-      const q = escapeHtml(r.quality || "—");
-      const speed = r.speedKBps ? `${(r.speedKBps / 1024).toFixed(2)} MB/s` : (escapeHtml(r.loadSpeed || "") || "—");
-      const ping = r.pingTime ? `${r.pingTime} ms` : "—";
-      return `<span class="probe-ok">✓ ${q} · ${speed} · ${ping}</span>`;
-    }
-    if (isPlayableFallbackResult(r)) {
-      return `<span class="probe-partial">◐ ${escapeHtml(r.message || "可播").slice(0, 24)}</span>`;
-    }
-    return `<span class="probe-partial">◐ ${escapeHtml(r.message || "部分").slice(0, 24)}</span>`;
+    return renderProbeCell(r);
   },
 
   _renderEpisodes() {
@@ -757,9 +573,10 @@ export const DetailScreen = {
         // Mid-probe, currentSource is still the tentative first hit — rank
         // whatever has been measured so far instead. A wrong pick is cheap:
         // the player fails over automatically.
+        const bestNow = pickBestPreferSource(this.sources, this.probeResults);
         const src = this.probeRunning
-          ? (this._bestSourceNow() || this.currentSource)
-          : (this.currentSource || this._bestSourceNow());
+          ? (bestNow || this.currentSource)
+          : (this.currentSource || bestNow);
         if (!src) { showToast("正在搜索播放源…"); return; }
         this.currentSource = src;
         await this._startPlayback(src, 0, { preferResume: true });

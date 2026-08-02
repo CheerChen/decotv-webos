@@ -53,18 +53,12 @@ export const ServerScreen = {
     // Pre-fill if a value was typed before re-render.
     if (this._lastValue) input.value = this._lastValue;
     input.addEventListener("input", () => { this._lastValue = input.value; });
-    input.addEventListener("focus", () => {
-      this.container.querySelectorAll(".focused").forEach((n) => n.classList.remove("focused"));
-      input.classList.add("focused");
-    });
+    input.addEventListener("focus", () => ScreenUtils.setFocus(input, this.container));
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); this._doConnect(); }
     });
 
-    btn.addEventListener("focus", () => {
-      this.container.querySelectorAll(".focused").forEach((n) => n.classList.remove("focused"));
-      btn.classList.add("focused");
-    });
+    btn.addEventListener("focus", () => ScreenUtils.setFocus(btn, this.container));
     btn.addEventListener("click", (e) => { e.preventDefault(); this._doConnect(); });
   },
 

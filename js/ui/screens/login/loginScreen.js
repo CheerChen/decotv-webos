@@ -54,18 +54,12 @@ export const LoginScreen = {
     const btn = this.container.querySelector("#loginBtn");
     const skipBtn = this.container.querySelector("#loginSkipBtn");
     if (skipBtn) {
-      skipBtn.addEventListener("focus", () => {
-        this.container.querySelectorAll(".focused").forEach((n) => n.classList.remove("focused"));
-        skipBtn.classList.add("focused");
-      });
+      skipBtn.addEventListener("focus", () => ScreenUtils.setFocus(skipBtn, this.container));
       skipBtn.addEventListener("click", (e) => { e.preventDefault(); AuthManager.skipLogin(); });
     }
 
     [u, p, btn].forEach((el) => {
-      el.addEventListener("focus", () => {
-        this.container.querySelectorAll(".focused").forEach((n) => n.classList.remove("focused"));
-        el.classList.add("focused");
-      });
+      el.addEventListener("focus", () => ScreenUtils.setFocus(el, this.container));
     });
     [u, p].forEach((el) => {
       el.addEventListener("keydown", (e) => {

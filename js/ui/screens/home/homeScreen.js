@@ -69,17 +69,13 @@ export const HomeScreen = {
     const results = new Array(ROWS.length).fill(null);
     let firstRendered = false;
 
-    const markerOf = (node) => (node
-      ? `${node.dataset.action || ""}|${node.dataset.key || ""}|${node.dataset.title || ""}|${node.dataset.row || ""}|${node.dataset.col || ""}`
-      : "");
-
     const renderReady = () => {
       // The "继续观看" row (mirrors PC home's first row) is rebuilt on every
       // pass rather than captured once, so a library pull landing mid-load is
       // picked up for free. It is a localStorage read, sorted and sliced.
       // Capture focus identity before the wholesale innerHTML wipe so later
       // row arrivals do not drop the ring (digit 0 / first-cover focus).
-      const marker = markerOf(scroll.querySelector(".focused"));
+      const marker = ScreenUtils.focusMarker(scroll.querySelector(".focused"));
       let html = this._renderHistoryRow();
       for (let i = 0; i < results.length; i++) {
         const r = results[i];
@@ -108,7 +104,7 @@ export const HomeScreen = {
       // Subsequent incremental renders: restore the same card by identity.
       if (marker) {
         const restored = Array.from(scroll.querySelectorAll(".focusable"))
-          .find((node) => markerOf(node) === marker);
+          .find((node) => ScreenUtils.focusMarker(node) === marker);
         if (restored) ScreenUtils.setInitialFocus(restored);
       }
     };
@@ -157,14 +153,11 @@ export const HomeScreen = {
   refreshLibraryData() {
     const scroll = this.container?.querySelector("#homeScroll");
     if (!scroll || !this._renderReady) return;
-    const markerOf = (node) => (node
-      ? `${node.dataset.action || ""}|${node.dataset.key || ""}|${node.dataset.col || ""}`
-      : "");
-    const marker = markerOf(scroll.querySelector(".focused"));
+    const marker = ScreenUtils.focusMarker(scroll.querySelector(".focused"));
     this._renderReady();
     if (!marker) return;
     const restored = Array.from(scroll.querySelectorAll(".focusable"))
-      .find((node) => markerOf(node) === marker);
+      .find((node) => ScreenUtils.focusMarker(node) === marker);
     if (restored) ScreenUtils.setInitialFocus(restored);
   },
 

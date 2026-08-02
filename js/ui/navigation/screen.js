@@ -27,6 +27,21 @@ export const ScreenUtils = {
     container.innerHTML = "";
   },
 
+  setFocus(target, scope = null) {
+    if (!target) return null;
+    const root = scope || target.closest?.(".screen") || target.parentElement || target.ownerDocument;
+    root.querySelectorAll?.(".focused").forEach((node) => node.classList.remove("focused"));
+    target.classList.add("focused");
+    target.focus?.();
+    return target;
+  },
+
+  focusMarker(node) {
+    return node
+      ? `${node.dataset.action || ""}|${node.dataset.key || ""}|${node.dataset.title || ""}|${node.dataset.row || ""}|${node.dataset.col || ""}`
+      : "";
+  },
+
   // Accept either a container (search descendants) or the focusable node itself.
   // Always clear other .focused nodes in the same .screen so querySelector
   // (".focused") cannot stick on a tab chip while a card also looks focused.
@@ -42,14 +57,8 @@ export const ScreenUtils = {
     if (!first) return;
 
     const scope = first.closest?.(".screen") || targetOrRoot.closest?.(".screen") || targetOrRoot;
-    scope.querySelectorAll?.(".focused").forEach((n) => n.classList.remove("focused"));
-    // Defensive: also clear on the root if scope was a nested fragment.
-    if (scope !== targetOrRoot) {
-      targetOrRoot.querySelectorAll?.(".focused").forEach((n) => n.classList.remove("focused"));
-    }
+    this.setFocus(first, scope);
 
-    first.classList.add("focused");
-    first.focus?.();
   },
 
   moveFocusDirectional(container, direction, selector = ".focusable") {
@@ -66,9 +75,7 @@ export const ScreenUtils = {
     const focusedInList = list.filter((n) => n.classList.contains("focused"));
     const current = focusedInList.length ? focusedInList[focusedInList.length - 1] : list[0];
     if (focusedInList.length !== 1) {
-      list.forEach((node) => node.classList.remove("focused"));
-      current.classList.add("focused");
-      current.focus?.();
+      this.setFocus(current, container);
       if (focusedInList.length === 0) return; // just established focus; wait for next key
     }
 
@@ -115,9 +122,7 @@ export const ScreenUtils = {
     const target = aligned[0]?.node || sorted[0]?.node || null;
     if (!target) return;
 
-    list.forEach((node) => node.classList.remove("focused"));
-    target.classList.add("focused");
-    target.focus?.();
+    this.setFocus(target, container);
     target.scrollIntoView?.({ block: "nearest", inline: "nearest", behavior: "smooth" });
   },
 
