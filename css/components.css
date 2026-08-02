@@ -343,6 +343,48 @@
   left: 0%;
 }
 
+/* The progress bar is a first-class focus stop (the default one). Focus is
+   the same ring the buttons wear, carried by the thumb; the track thickens
+   so the state also reads from 3 m without the thumb in view. */
+.player-progress-track.focused {
+  height: 8px;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.player-progress-track.focused .player-progress-thumb {
+  width: 22px;
+  height: 22px;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/* Held Left/Right: the preview position is live, make the thumb read as
+   "in hand". */
+.player-progress-track.scrubbing .player-progress-thumb {
+  width: 26px;
+  height: 26px;
+}
+
+/* Timestamp bubble riding the thumb — the eye stays on the bar during a
+   scrub, so the preview time lives there rather than in the corner label. */
+.player-progress-bubble {
+  display: none;
+  position: absolute;
+  bottom: 24px;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  background: rgba(0, 0, 0, 0.85);
+  border: 1px solid var(--accent-dim);
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.player-progress-track.scrubbing .player-progress-bubble {
+  display: block;
+}
+
 /* Outro mark: tick + tinted zone from the trigger point to the end of the
    track. Yellow (same as probe-partial) so it never reads as the accent
    playback fill sliding underneath it. */

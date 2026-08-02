@@ -11,6 +11,9 @@ import { escapeHtml, escapeAttr, formatTime } from "../../utils.js";
 
 // How often playback progress is persisted to /api/playrecords while watching.
 const RECORD_SAVE_INTERVAL_MS = 10000;
+// Left/Right held longer than this on the focused progress bar enters the
+// smooth scrub; a shorter press is a ±10s tap.
+const SCRUB_HOLD_MS = 350;
 import {
   getSourceProbeKey,
   isVerifiedPlaybackResult,
@@ -62,7 +65,11 @@ export const PlayerScreen = {
   probeResults: new Map(),
   failedSourceKeys: new Set(),
   currentSourceKey: "",
-  focusZone: "controls",
+  // Two focus zones inside the controls overlay: the progress bar (default —
+  // it is a first-class focus stop) and the button row below it.
+  focusZone: "progress",
+  _scrub: null,           // Left/Right hold-to-scrub state; see _scrubKeyDown
+  _keyUpHandler: null,    // document keyup listener (FocusEngine only forwards keydown)
   _listeners: [],
   resumeTime: 0,          // seconds to seek to when the initial episode loads
   _resumeApplied: false,
@@ -93,7 +100,8 @@ export const PlayerScreen = {
     );
     this.failedSourceKeys = new Set();
     this.currentSourceKey = params.currentSourceKey || "";
-    this.focusZone = "controls";
+    this.focusZone = "progress";
+    this._scrub = { pressed: false, active: false, dir: 0, holdTimer: 0, raf: 0, previewSec: 0, ts: 0, last: 0 };
     this._listeners = [];
     this.resumeTime = Math.max(0, Number(params.resumeTime || 0));
     this._resumeApplied = false;
@@ -125,6 +133,7 @@ export const PlayerScreen = {
               <div class="player-progress-fill" id="playerProgressFill"></div>
               <div class="player-progress-outro" id="playerProgressOutro" style="display:none;"></div>
               <div class="player-progress-thumb" id="playerProgressThumb"></div>
+              <div class="player-progress-bubble" id="playerProgressBubble">0:00</div>
             </div>
             <div class="player-controls-row">
               <div class="player-control-buttons" id="playerButtons"></div>
@@ -144,7 +153,10 @@ export const PlayerScreen = {
 
     this.tickTimer = setInterval(() => this._tick(), 500);
     this._resetControlsAutoHide();
-    ScreenUtils.setInitialFocus(this.container.querySelector('.player-control-btn[data-ctrl="playPause"]'));
+    // FocusEngine forwards keydown only; the scrub commit needs the real keyup.
+    this._keyUpHandler = (e) => this._onKeyUp(e);
+    document.addEventListener("keyup", this._keyUpHandler, true);
+    this._focusProgress();
   },
 
   _renderButtons() {
@@ -163,16 +175,16 @@ export const PlayerScreen = {
       { action: "markOutro", label: "标记片尾", text: true, disabled: this.episodes.length <= 1 }
     ];
     // Rebuilding innerHTML drops the .focused class; without restoring it the
-    // next left/right lands in the video zone and seeks — the "phantom focus"
-    // misoperation. Carry focus across the rebuild (fall back to play/pause
-    // when the previously focused button became disabled, e.g. nextEp on the
-    // last episode).
+    // next left/right lands nowhere — the "phantom focus" misoperation. Carry
+    // focus across the rebuild only while the button zone owns it (fall back
+    // to play/pause when the previously focused button became disabled, e.g.
+    // nextEp on the last episode). In the progress zone the bar keeps focus.
     const focusedCtrl = wrap.querySelector(".player-control-btn.focused")?.dataset?.ctrl || null;
     wrap.innerHTML = defs.map((d) => `
       <button class="player-control-btn${d.text ? " player-control-btn-text" : ""}${d.active ? " active" : ""}${d.disabled ? "" : " focusable"}"
         data-ctrl="${d.action}" ${d.disabled ? "disabled" : ""}>${d.label}</button>
     `).join("");
-    if (focusedCtrl) {
+    if (this.focusZone === "buttons") {
       const target = wrap.querySelector(`.player-control-btn.focusable[data-ctrl="${focusedCtrl}"]`)
         || wrap.querySelector('.player-control-btn[data-ctrl="playPause"]');
       if (target) {
@@ -393,15 +405,24 @@ export const PlayerScreen = {
     this._updateOsdStats();
   },
 
-  _tick() {
-    const v = this.video;
-    if (!v) return;
-    const cur = v.currentTime || 0;
-    const dur = v.duration || 0;
+  _renderProgress(cur, dur) {
     const pct = dur > 0 ? (cur / dur) * 100 : 0;
     this.container.querySelector("#playerProgressFill").style.width = `${pct}%`;
     this.container.querySelector("#playerProgressThumb").style.left = `${pct}%`;
     this.container.querySelector("#playerTime").textContent = `${formatTime(cur)} / ${formatTime(dur)}`;
+    // The bubble rides the thumb; CSS shows it during a scrub only.
+    const bubble = this.container.querySelector("#playerProgressBubble");
+    if (bubble) {
+      bubble.style.left = `${pct}%`;
+      bubble.textContent = formatTime(cur);
+    }
+  },
+
+  _tick() {
+    const v = this.video;
+    if (!v) return;
+    // While scrubbing, the preview position owns the bar.
+    if (!this._scrub?.active) this._renderProgress(v.currentTime || 0, v.duration || 0);
     this._updateOsdStats();
     if (!this._resumeApplied) this._applyResume(); // retry until metadata is ready
     // Persist progress periodically while actually playing.
@@ -627,12 +648,22 @@ export const PlayerScreen = {
   },
 
   setControlsVisible(visible) {
+    const wasVisible = this.controlsVisible;
     this.controlsVisible = visible;
     const overlay = this.container.querySelector("#playerControls");
     if (!overlay) return;
-    if (visible) overlay.classList.remove("hidden");
-    else overlay.classList.add("hidden");
-    if (visible) this._resetControlsAutoHide();
+    if (visible) {
+      overlay.classList.remove("hidden");
+      // The bar always reappears with the progress zone focused — hiding
+      // stripped every .focused, so there is no stale button focus to trip on.
+      if (!wasVisible) this._focusProgress();
+      this._resetControlsAutoHide();
+    } else {
+      this._stopScrub(true);
+      overlay.classList.add("hidden");
+      this.container.querySelectorAll("#playerControls .focused").forEach((n) => n.classList.remove("focused"));
+      this.focusZone = "progress";
+    }
   },
 
   _resetControlsAutoHide() {
@@ -640,8 +671,8 @@ export const PlayerScreen = {
     this.controlsHideTimer = setTimeout(() => {
       this.controlsHideTimer = null;
       // The floating source/episode panel follows the same five-second timer
-      // as the playback bar. Keep both visible while paused.
-      if (this.paused) return;
+      // as the playback bar. Keep both visible while paused or mid-scrub.
+      if (this.paused || this._scrub?.active) return;
       const hadPanel = this.episodePanelVisible || this.sourcePanelVisible;
       this.episodePanelVisible = false;
       this.sourcePanelVisible = false;
@@ -652,6 +683,99 @@ export const PlayerScreen = {
       }
       this.setControlsVisible(false);
     }, 5000);
+  },
+
+  _focusDefaultButton() {
+    const first = this.container.querySelector('.player-control-btn[data-ctrl="playPause"]');
+    if (!first) return;
+    this.container.querySelectorAll(".focused").forEach((n) => n.classList.remove("focused"));
+    first.classList.add("focused");
+    first.focus();
+  },
+
+  // ── Focus zones ────────────────────────────────────────────────────────────
+  _focusProgress() {
+    this.focusZone = "progress";
+    this.container.querySelectorAll("#playerControls .focused").forEach((n) => n.classList.remove("focused"));
+    this.container.querySelector("#playerProgress")?.classList.add("focused");
+  },
+
+  _focusButtons() {
+    this.focusZone = "buttons";
+    this.container.querySelector("#playerProgress")?.classList.remove("focused");
+    this._focusDefaultButton();
+  },
+
+  // ── Left/Right on the progress bar: tap = ±10s, hold = accelerating scrub ──
+  // FocusEngine forwards keydown without the `repeat` flag, so repeats are
+  // recognized by `pressed` already being set. The preview position moves on a
+  // rAF loop (8x → ~96x as the key is held) and only commits to the video on
+  // keyup — one seek instead of a seek per repeat.
+  _scrubKeyDown(dir) {
+    const s = this._scrub;
+    if (s.pressed) {
+      // webOS key repeat: the hold timer (or the running scrub) owns it.
+      if (!s.active && s.dir === dir && !s.holdTimer) this._startScrub(dir);
+      return;
+    }
+    s.pressed = true;
+    s.dir = dir;
+    if (s.holdTimer) clearTimeout(s.holdTimer);
+    s.holdTimer = setTimeout(() => { s.holdTimer = 0; this._startScrub(dir); }, SCRUB_HOLD_MS);
+  },
+
+  _startScrub(dir) {
+    const v = this.video;
+    if (!v || !(v.duration > 0)) return;
+    const s = this._scrub;
+    s.active = true;
+    s.dir = dir;
+    s.previewSec = v.currentTime || 0;
+    s.ts = performance.now();
+    s.last = 0;
+    this.container.querySelector("#playerProgress")?.classList.add("scrubbing");
+    if (!s.raf) s.raf = requestAnimationFrame((now) => this._scrubTick(now));
+  },
+
+  _scrubTick(now) {
+    const s = this._scrub;
+    const v = this.video;
+    if (!s.active) { s.raf = 0; return; }
+    if (!v || !(v.duration > 0)) { this._stopScrub(false); return; }
+    const last = s.last || now;
+    s.last = now;
+    const dt = Math.min(0.05, (now - last) / 1000);
+    const held = (now - s.ts) / 1000;
+    const speed = 8 + Math.min(held, 4) * 22; // accelerate 8x → ~96x
+    s.previewSec = Math.max(0, Math.min(v.duration, s.previewSec + s.dir * speed * dt));
+    this._renderProgress(s.previewSec, v.duration);
+    s.raf = requestAnimationFrame((n) => this._scrubTick(n));
+  },
+
+  _stopScrub(commit) {
+    const s = this._scrub;
+    if (!s) return;
+    if (s.holdTimer) { clearTimeout(s.holdTimer); s.holdTimer = 0; }
+    if (!s.active) return;
+    s.active = false;
+    s.last = 0;
+    if (s.raf) { cancelAnimationFrame(s.raf); s.raf = 0; }
+    this.container.querySelector("#playerProgress")?.classList.remove("scrubbing");
+    if (commit && this.video && this.video.duration > 0) {
+      try { this.video.currentTime = s.previewSec; } catch (_) {}
+    }
+    this._resetControlsAutoHide();
+  },
+
+  _onKeyUp(event) {
+    const code = Number(event.keyCode || 0);
+    if (code !== 37 && code !== 39) return;
+    const s = this._scrub;
+    if (!s || !s.pressed) return;
+    if (s.holdTimer) { clearTimeout(s.holdTimer); s.holdTimer = 0; }
+    if (s.active) this._stopScrub(true);
+    else this._seek(s.dir * 10); // short tap = ±10s
+    s.pressed = false;
   },
 
   _togglePlayPause() {
@@ -978,44 +1102,49 @@ export const PlayerScreen = {
       return;
     }
 
-    // No panel: controls area vs button area navigation.
-    const focusedBtn = this.container.querySelector(".player-control-btn.focused");
+    // No panel: two focus zones inside the controls overlay — the progress bar
+    // (default; Left/Right seek and hold-scrub there) and the button row below
+    // (Down enters it, Up returns). Hiding the bar strips every .focused and
+    // resets the zone, so there is no stale-focus state to gate against.
 
-    // Down → move focus to control buttons (show controls if hidden).
+    // Down → reveal the bar, or hand focus from the bar to the buttons.
     if (code === 40) {
       if (!this.controlsVisible) { this.setControlsVisible(true); return; }
-      if (!focusedBtn) {
-        const first = this.container.querySelector('.player-control-btn[data-ctrl="playPause"]');
-        if (first) {
-          this.container.querySelectorAll(".focused").forEach((n) => n.classList.remove("focused"));
-          first.classList.add("focused");
-          first.focus();
-        }
+      if (this.focusZone === "progress") this._focusButtons();
+      this._resetControlsAutoHide();
+      return;
+    }
+
+    // Up → from the buttons back to the bar. On the bar it only reveals the
+    // controls; the old "open episode list" shortcut is gone — the list is a
+    // button now that the row is reachable by focus.
+    if (code === 38) {
+      if (!this.controlsVisible) { this.setControlsVisible(true); return; }
+      if (this.focusZone === "buttons") this._focusProgress();
+      this._resetControlsAutoHide();
+      return;
+    }
+
+    // Left/Right: on the progress bar tap = ±10s / hold = smooth scrub; on the
+    // buttons it moves button focus. While hidden it reveals the bar first and
+    // the same press already starts seeking.
+    if (code === 37 || code === 39) {
+      if (!this.controlsVisible) this.setControlsVisible(true);
+      if (this.focusZone === "progress") {
+        this._scrubKeyDown(code === 37 ? -1 : 1);
+      } else {
+        ScreenUtils.moveFocusDirectional(this.container, code === 37 ? "left" : "right", ".player-control-btn.focusable");
       }
       this._resetControlsAutoHide();
       return;
     }
 
-    // Up → open the episode list instead of controlling seek.
-    if (code === 38) {
-      this._toggleEpisodePanel();
-      return;
-    }
-
-    // Left/Right: if on buttons, move between them. Otherwise seek.
-    if (code === 37 || code === 39) {
-      if (focusedBtn) {
-        ScreenUtils.moveFocusDirectional(this.container, code === 37 ? "left" : "right", ".player-control-btn");
-        this._resetControlsAutoHide();
-        return;
-      }
-      this._seek(code === 37 ? -10 : 10);
-      return;
-    }
-
     if (code === 13) {
-      if (focusedBtn) { this._performControlAction(focusedBtn.dataset.ctrl); return; }
-      // No focused control: toggle play/pause + show controls.
+      if (this.controlsVisible && this.focusZone === "buttons") {
+        const focusedBtn = this.container.querySelector(".player-control-btn.focused");
+        if (focusedBtn) { this._performControlAction(focusedBtn.dataset.ctrl); return; }
+      }
+      // On the bar (or with the bar hidden): toggle play/pause + show controls.
       this._togglePlayPause();
       return;
     }
@@ -1076,6 +1205,12 @@ export const PlayerScreen = {
     this._cancelAdScan();
     // Persist final position before tearing the video down.
     this._saveRecord(true);
+    this._stopScrub(false);
+    if (this._scrub) this._scrub.pressed = false;
+    if (this._keyUpHandler) {
+      document.removeEventListener("keyup", this._keyUpHandler, true);
+      this._keyUpHandler = null;
+    }
     if (this.tickTimer) { clearInterval(this.tickTimer); this.tickTimer = null; }
     if (this.controlsHideTimer) { clearTimeout(this.controlsHideTimer); this.controlsHideTimer = null; }
     if (this.video) {
