@@ -66,6 +66,17 @@
   font-family: inherit;
   cursor: pointer;
   transition: background 160ms ease, transform 160ms ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.btn svg {
+  width: 24px;
+  height: 24px;
+  fill: currentColor;
+  display: block;
 }
 
 .btn.focused {
@@ -75,13 +86,16 @@
   box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
+/* Primary = quiet tint when idle. On a D-pad UI the solid accent fill is the
+   focus indicator; an unfocused button wearing it reads as a second cursor. */
 .btn.primary {
-  background: var(--accent-dim);
-  color: var(--bg-color);
+  background: rgba(94, 234, 212, 0.14);
+  color: var(--accent);
 }
 
 .btn.primary.focused {
   background: var(--accent);
+  color: var(--bg-color);
 }
 
 .btn.ghost {
@@ -205,6 +219,7 @@
 
 .episode-item {
   height: 64px;
+  box-sizing: border-box;
   background: var(--bg-elev);
   border-radius: 8px;
   display: flex;
@@ -214,6 +229,13 @@
   color: var(--text-color);
   cursor: pointer;
   transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+/* Last-watched episode: quiet tint + border, never a solid fill. */
+.episode-item.resume {
+  border: 2px solid var(--accent-dim);
+  background: rgba(94, 234, 212, 0.08);
+  color: var(--accent);
 }
 
 .episode-item.focused {
@@ -321,6 +343,19 @@
   left: 0%;
 }
 
+/* Outro mark: tick + tinted zone from the trigger point to the end of the
+   track. Yellow (same as probe-partial) so it never reads as the accent
+   playback fill sliding underneath it. */
+.player-progress-outro {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  background: rgba(250, 204, 21, 0.28);
+  border-left: 3px solid #facc15;
+  border-radius: 0 3px 3px 0;
+}
+
 .player-controls-row {
   display: flex;
   align-items: center;
@@ -356,8 +391,13 @@
   box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
+/* "Panel open" state: text tint only. A solid fill here is indistinguishable
+   from focus at 3 m — solid accent fill belongs to .focused exclusively. */
 .player-control-btn.active {
-  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.player-control-btn.active.focused {
   color: var(--bg-color);
 }
 
@@ -373,7 +413,7 @@
   display: block;
 }
 
-/* Text controls (标记片尾/换源/列表/返回) use a pill instead of a fixed circle. */
+/* Text controls (标记片尾/换源/列表) use a pill instead of a fixed circle. */
 .player-control-btn-text {
   width: auto;
   min-width: 88px;
@@ -606,6 +646,29 @@
   text-align: right;
   max-width: 55%;
   word-break: break-all;
+}
+
+/* Detail section heads: title + inline control + hint on one baseline. */
+
+.detail-section-head {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin: 28px 0 10px;
+}
+
+.detail-section-head .section-title {
+  margin: 0;
+}
+
+.detail-section-head .btn.chip {
+  min-width: 0;
+  height: 44px;
+}
+
+.section-hint {
+  font-size: 16px;
+  color: var(--text-dim);
 }
 
 /* Source list (detail screen) — ranked after probe */

@@ -56,6 +56,9 @@ const PREFER_MIN_VERIFIED_FOR_AUTOPLAY = 4;
 // first frame than waiting for the count on titles whose probes are slow.
 const PREFER_QUALITY_SHORTCUT_RANK = 1080;
 
+// Monochrome play glyph for the primary action (inherits color via currentColor).
+const PLAY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
+
 // Play-record key is per-movie (title|year), not per-source. This matches
 // the 3-pick algorithm: switching sources overwrites the same record, and
 // "continue watching" resumes by title regardless of which source was used.
@@ -165,7 +168,9 @@ export const DetailScreen = {
       return;
     }
 
-    ScreenUtils.setInitialFocus(this.container.querySelector('.btn[data-action="refresh"]'));
+    // Focus the primary action from the start: play is never disabled, and
+    // pressing it mid-probe plays the best source measured so far.
+    ScreenUtils.setInitialFocus(this.container.querySelector('.btn[data-action="play"]'));
     await this._searchAndPrefer();
     this._saveCache();
   },
@@ -197,9 +202,10 @@ export const DetailScreen = {
     this._renderSourceList();
     this._renderEpisodes();
     this._setStatus(`已选「${escapeHtml(this.currentSource?.source_name || this.currentSource?.source || "")}」`);
+    this._updatePlayButton();
+    this._updateFavoriteButton();
     const playBtn = this.container.querySelector('.btn[data-action="play"]');
     if (playBtn) {
-      playBtn.disabled = false;
       this.container.querySelectorAll(".focused").forEach((n) => n.classList.remove("focused"));
       playBtn.classList.add("focused");
       playBtn.focus();
@@ -217,6 +223,11 @@ export const DetailScreen = {
     const title = escapeHtml(this.title);
     // Episodes sit above the (often long) source list so they stay reachable
     // without scrolling past every probe row. Prefer-status stays in the hero.
+    //
+    // Hero actions carry exactly two buttons: the one primary action (play,
+    // never disabled — pressing it mid-probe plays the best source so far) and
+    // favorite. Back lives on the remote's back key; refresh moved next to the
+    // source list it operates on.
     this.container.innerHTML = `
       ${renderNavHeader()}
       <div class="content-scroll" id="detailScroll">
@@ -229,20 +240,66 @@ export const DetailScreen = {
             <div class="detail-cast" id="detailCast"></div>
             <div id="detailStatus" class="detail-status">准备中…</div>
             <div class="detail-actions" id="detailActions">
-              <button class="btn primary focusable" data-action="play" disabled>播放</button>
+              <button class="btn primary focusable" data-action="play">${PLAY_ICON}<span>播放</span></button>
               <button class="btn focusable" data-action="favorite">收藏</button>
-              <button class="btn ghost focusable" data-action="refresh">重新测速</button>
-              <button class="btn ghost focusable" data-action="back">返回</button>
             </div>
           </div>
         </div>
-        <div class="section-title" id="episodesTitle" style="display:none;">剧集列表</div>
+        <div class="detail-section-head" id="episodesHead" style="display:none;">
+          <span class="section-title">剧集</span>
+          <span class="section-hint" id="episodesHint"></span>
+        </div>
         <div class="episodes-list" id="episodesList" style="display:none;"></div>
-        <div class="section-title">播放源（测速后按质量排序）</div>
+        <div class="detail-section-head">
+          <span class="section-title">播放源</span>
+          <button class="btn chip ghost focusable" data-action="refresh">重新测速</button>
+          <span class="section-hint">OK 直接播放 · 测速后按质量排序</span>
+        </div>
         <div id="sourceList"><div class="empty-state">正在搜索播放源…</div></div>
       </div>
     `;
     bindNavClicks(this.container);
+    this._updatePlayButton();
+    this._updateFavoriteButton();
+  },
+
+  // Saved play record for this title (per-movie key, any source).
+  _playRecord() {
+    const key = this.currentSource
+      ? recordKeyFor(this.currentSource)
+      : LocalLibrary.recordKeyForTitle(this.title, this.year);
+    return LocalLibrary.getPlayRecords()[key] || null;
+  },
+
+  // The play button announces what preferResume will actually do, instead of
+  // silently jumping to episode 3 at 12:34.
+  _updatePlayButton() {
+    const btn = this.container?.querySelector('.btn[data-action="play"]');
+    if (!btn) return;
+    const record = this._playRecord();
+    let label = "播放";
+    if (record && (Number(record.play_time) > 0 || Number(record.index) > 1)) {
+      label = Number(record.total_episodes) > 1
+        ? `继续播放 第 ${record.index} 集`
+        : "继续播放";
+    }
+    btn.innerHTML = `${PLAY_ICON}<span>${escapeHtml(label)}</span>`;
+  },
+
+  _updateFavoriteButton() {
+    const btn = this.container?.querySelector('.btn[data-action="favorite"]');
+    if (!btn) return;
+    const r = this.currentSource;
+    const on = r ? LocalLibrary.isFavorited(`${r.source}+${r.id}`) : false;
+    btn.textContent = on ? "已收藏" : "收藏";
+  },
+
+  // Best candidate with the measurements available right now — lets the play
+  // button work mid-probe. A wrong pick is cheap: the player auto-fails-over.
+  _bestSourceNow() {
+    if (!this.sources.length) return null;
+    const ranked = rankSourcesByProbe(this.sources, this.probeResults);
+    return ranked[0] || this.sources[0];
   },
 
   // Update hero poster when a better cover arrives (history entry without
@@ -525,14 +582,17 @@ export const DetailScreen = {
     this._setStatus(reselect
       ? `✨ 已选「${escapeHtml(best.source_name || best.source)}」，准备播放`
       : `已选「${escapeHtml(this.currentSource?.source_name || this.currentSource?.source || "")}」`);
+    this._updatePlayButton();
+    this._updateFavoriteButton();
     // Probing now outlives the detail screen: auto-play may already have moved
     // the user into the player, and a resumed run finishes while they are
     // browsing the source list. Only grab focus for a fresh run that the user
-    // is actually waiting on, and only while detail is the visible route.
+    // is actually waiting on, only while detail is the visible route, and only
+    // if the user has not already moved focus elsewhere (episodes/sources).
     if (reselect && Router.current === "detail") {
+      const focusedNow = this.container.querySelector(".focused");
       const playBtn = this.container.querySelector('.btn[data-action="play"]');
-      if (playBtn) {
-        playBtn.disabled = false;
+      if (playBtn && (!focusedNow || focusedNow === playBtn)) {
         this.container.querySelectorAll(".focused").forEach((n) => n.classList.remove("focused"));
         playBtn.classList.add("focused");
         playBtn.focus();
@@ -590,16 +650,25 @@ export const DetailScreen = {
 
   _renderEpisodes() {
     const list = this.container.querySelector("#episodesList");
-    const title = this.container.querySelector("#episodesTitle");
+    const head = this.container.querySelector("#episodesHead");
     if (!this.currentSource || !Array.isArray(this.currentSource.episodes) || this.currentSource.episodes.length <= 1) {
       list.style.display = "none";
-      title.style.display = "none";
+      head.style.display = "none";
       return;
     }
-    title.style.display = "block";
+    const eps = this.currentSource.episodes;
+    const record = this._playRecord();
+    const resumeIdx = record && Number(record.index) >= 1
+      ? Math.min(Number(record.index) - 1, eps.length - 1)
+      : -1;
+    head.style.display = "flex";
+    const hint = this.container.querySelector("#episodesHint");
+    if (hint) {
+      hint.textContent = `共 ${eps.length} 集${resumeIdx >= 0 ? ` · 上次看到第 ${resumeIdx + 1} 集` : ""}`;
+    }
     list.style.display = "grid";
-    list.innerHTML = this.currentSource.episodes.map((_, i) => `
-      <div class="episode-item focusable" data-action="play-ep" data-index="${i}">第 ${i + 1} 集</div>
+    list.innerHTML = eps.map((_, i) => `
+      <div class="episode-item${i === resumeIdx ? " resume" : ""} focusable" data-action="play-ep" data-index="${i}">第 ${i + 1} 集</div>
     `).join("");
     ScreenUtils.indexFocusables(list, ".focusable");
   },
@@ -685,8 +754,15 @@ export const DetailScreen = {
       if (!focused) return;
       const action = focused.dataset.action;
       if (action === "play") {
-        if (!this.currentSource) { showToast("尚未选出可播源"); return; }
-        await this._startPlayback(this.currentSource, 0, { preferResume: true });
+        // Mid-probe, currentSource is still the tentative first hit — rank
+        // whatever has been measured so far instead. A wrong pick is cheap:
+        // the player fails over automatically.
+        const src = this.probeRunning
+          ? (this._bestSourceNow() || this.currentSource)
+          : (this.currentSource || this._bestSourceNow());
+        if (!src) { showToast("正在搜索播放源…"); return; }
+        this.currentSource = src;
+        await this._startPlayback(src, 0, { preferResume: true });
         return;
       }
       if (action === "play-ep") {
@@ -714,7 +790,6 @@ export const DetailScreen = {
         await this._probeAndPick();
         return;
       }
-      if (action === "back") { Router.back(); return; }
       if (handleNavAction(action)) return;
     }
   },
@@ -728,6 +803,7 @@ export const DetailScreen = {
     if (LocalLibrary.isFavorited(key)) {
       LocalLibrary.deleteFavorite(key);
       LibrarySync.removeFavorite(key);
+      this._updateFavoriteButton();
       showToast("已取消收藏");
       return;
     }
@@ -741,6 +817,7 @@ export const DetailScreen = {
     };
     LocalLibrary.addFavorite(key, favorite);
     LibrarySync.pushFavorite(key, favorite);
+    this._updateFavoriteButton();
     showToast("已收藏");
   },
 

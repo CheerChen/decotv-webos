@@ -123,6 +123,7 @@ export const PlayerScreen = {
           <div class="player-controls-bottom">
             <div class="player-progress-track" id="playerProgress">
               <div class="player-progress-fill" id="playerProgressFill"></div>
+              <div class="player-progress-outro" id="playerProgressOutro" style="display:none;"></div>
               <div class="player-progress-thumb" id="playerProgressThumb"></div>
             </div>
             <div class="player-controls-row">
@@ -148,19 +149,37 @@ export const PlayerScreen = {
 
   _renderButtons() {
     const wrap = this.container.querySelector("#playerButtons");
+    // Standard transport cluster (⏮ ⏯ ⏭) first, text pills by usage frequency.
+    // markOutro sits at the far end: it is the rarest action and the one where
+    // an accidental press is most annoying. Its "marked" state lives on the
+    // progress bar (see _updateOutroMarker), never on the button — a solid
+    // fill on the bar is reserved for focus and nothing else.
     const defs = [
-      { action: "playPause", label: this.paused ? ICONS.play : ICONS.pause },
       { action: "prevEp", label: ICONS.prevEp, disabled: this.episodes.length <= 1 || this.index <= 0 },
+      { action: "playPause", label: this.paused ? ICONS.play : ICONS.pause },
       { action: "nextEp", label: ICONS.nextEp, disabled: this.episodes.length <= 1 || this.index >= this.episodes.length - 1 },
-      { action: "markOutro", label: "标记片尾", text: true, active: Boolean(this._getOutroMark()), disabled: this.episodes.length <= 1 },
-      { action: "sourcePanel", label: "换源", text: true, active: this.sourcePanelVisible, disabled: this.allSources.length <= 1 },
       { action: "episodePanel", label: "列表", text: true, active: this.episodePanelVisible, disabled: this.episodes.length <= 1 },
-      { action: "back", label: "返回", text: true }
+      { action: "sourcePanel", label: "换源", text: true, active: this.sourcePanelVisible, disabled: this.allSources.length <= 1 },
+      { action: "markOutro", label: "标记片尾", text: true, disabled: this.episodes.length <= 1 }
     ];
+    // Rebuilding innerHTML drops the .focused class; without restoring it the
+    // next left/right lands in the video zone and seeks — the "phantom focus"
+    // misoperation. Carry focus across the rebuild (fall back to play/pause
+    // when the previously focused button became disabled, e.g. nextEp on the
+    // last episode).
+    const focusedCtrl = wrap.querySelector(".player-control-btn.focused")?.dataset?.ctrl || null;
     wrap.innerHTML = defs.map((d) => `
       <button class="player-control-btn${d.text ? " player-control-btn-text" : ""}${d.active ? " active" : ""}${d.disabled ? "" : " focusable"}"
         data-ctrl="${d.action}" ${d.disabled ? "disabled" : ""}>${d.label}</button>
     `).join("");
+    if (focusedCtrl) {
+      const target = wrap.querySelector(`.player-control-btn.focusable[data-ctrl="${focusedCtrl}"]`)
+        || wrap.querySelector('.player-control-btn[data-ctrl="playPause"]');
+      if (target) {
+        target.classList.add("focused");
+        target.focus();
+      }
+    }
   },
 
   _bindVideo() {
@@ -393,6 +412,24 @@ export const PlayerScreen = {
     this._checkStall(v);
     this._checkAdSkip(v);
     this._checkOutroMark(v);
+    this._updateOutroMarker(v);
+  },
+
+  // The outro mark is a fact about the timeline, so it is drawn on the
+  // timeline: a tick + tinted zone from the trigger point to the end.
+  // Kept in _tick because duration arrives late and changes per episode.
+  _updateOutroMarker(v) {
+    const el = this.container.querySelector("#playerProgressOutro");
+    if (!el) return;
+    const duration = Number(v?.duration);
+    const mark = this._getOutroMark();
+    if (this.episodes.length <= 1 || !this._isValidOutroMark(mark, duration)) {
+      el.style.display = "none";
+      return;
+    }
+    const pct = Math.max(0, Math.min(100, (1 - Number(mark.fromEnd) / duration) * 100));
+    el.style.left = `${pct}%`;
+    el.style.display = "block";
   },
 
   _checkOutroMark(v) {
@@ -601,8 +638,19 @@ export const PlayerScreen = {
   _resetControlsAutoHide() {
     if (this.controlsHideTimer) clearTimeout(this.controlsHideTimer);
     this.controlsHideTimer = setTimeout(() => {
-      // Auto-hide only when playing and no panel open.
-      if (!this.paused && !this.episodePanelVisible && !this.sourcePanelVisible) this.setControlsVisible(false);
+      this.controlsHideTimer = null;
+      // The floating source/episode panel follows the same five-second timer
+      // as the playback bar. Keep both visible while paused.
+      if (this.paused) return;
+      const hadPanel = this.episodePanelVisible || this.sourcePanelVisible;
+      this.episodePanelVisible = false;
+      this.sourcePanelVisible = false;
+      if (hadPanel) {
+        this.container.querySelector("#playerEpisodePanel")?.remove();
+        this.container.querySelector("#playerSourcePanel")?.remove();
+        this._renderButtons();
+      }
+      this.setControlsVisible(false);
     }, 5000);
   },
 
@@ -667,7 +715,9 @@ export const PlayerScreen = {
       LocalLibrary.saveOutroMark(key, { fromEnd, markedAt: Date.now() });
       showToast("已标记片尾，本剧各集播到此处自动下一集");
     }
-    this._renderButtons();
+    // No button re-render: the mark state is drawn on the progress bar, and
+    // rebuilding the buttons here is what used to silently drop focus.
+    this._updateOutroMarker(this.video);
     this.setControlsVisible(true);
   },
 
@@ -946,14 +996,9 @@ export const PlayerScreen = {
       return;
     }
 
-    // Up → if on buttons, go back to video area (unfocus). Otherwise seek +30.
+    // Up → open the episode list instead of controlling seek.
     if (code === 38) {
-      if (focusedBtn) {
-        focusedBtn.classList.remove("focused");
-        this._resetControlsAutoHide();
-        return;
-      }
-      this._seek(30);
+      this._toggleEpisodePanel();
       return;
     }
 
@@ -989,7 +1034,6 @@ export const PlayerScreen = {
       case "markOutro": this._toggleOutroMark(); break;
       case "sourcePanel": this._toggleSourcePanel(); break;
       case "episodePanel": this._toggleEpisodePanel(); break;
-      case "back": this._stopAndExit(); break;
     }
   },
 
