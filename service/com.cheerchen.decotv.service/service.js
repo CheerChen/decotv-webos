@@ -7,6 +7,8 @@
 var Service = require("webos-service");
 var http = require("http");
 var https = require("https");
+var fs = require("fs");
+var path = require("path");
 var URLCtor = require("url").URL;
 var SessionStore = require("./sessionStore").SessionStore;
 var originOf = require("./sessionStore").originOf;
@@ -14,7 +16,16 @@ var ImageCache = require("./imageCache").ImageCache;
 var ImagePipeline = require("./imagePipeline").ImagePipeline;
 
 var SERVICE_ID = "com.cheerchen.decotv.service";
-var SESSION_FILE = "/media/internal/decotv_sessions.json";
+// The cookie jar lives INSIDE the service's install directory on purpose: its
+// lifetime must match the app's. An earlier location on /media/internal
+// survived uninstall and reinstall, which meant removing the app never
+// revoked the authorization — and a reinstall silently resumed the session,
+// making the login flow untestable.
+var SESSION_FILE = path.join(__dirname, "sessions.json");
+// Pre-0.5.1 location; delete it so no credential cookie outlives the app.
+var LEGACY_SESSION_FILE = "/media/internal/decotv_sessions.json";
+try { fs.unlinkSync(LEGACY_SESSION_FILE); } catch (_) {}
+// The image cache is content, not credentials — surviving a reinstall is fine.
 var IMAGE_CACHE_DIR = "/media/internal/decotv_image_cache";
 var MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 var service = new Service(SERVICE_ID);

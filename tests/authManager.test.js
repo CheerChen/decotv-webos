@@ -131,10 +131,10 @@ describe("a session only counts once the server accepts it", () => {
 });
 
 describe("an account session is not the same as knowing the username", () => {
-  // The auth cookie lives in the JS service's store on /media/internal and
-  // survives a reinstall; the credentials live in webview localStorage and do
-  // not. Gating sync on isLoggedIn() in that state silently disabled it
-  // despite a session the server still honoured.
+  // The auth cookie lives in the JS service's store and the credentials in
+  // webview localStorage — separate stores that can diverge. Gating sync on
+  // isLoggedIn() in that state silently disabled it despite a session the
+  // server still honoured.
   test("a valid cookie with the credentials gone still counts as an account session", async () => {
     stubApi({ hasCookie: true, sessionValid: true });
     assert.equal(await AuthManager._establishSession(), true);

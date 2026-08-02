@@ -89,11 +89,11 @@ export const AuthManager = {
 
   // A server-verified account session exists — via the persisted cookie or a
   // credential login — as opposed to browsing anonymously. Distinct from
-  // isLoggedIn(): the auth cookie lives in the JS service's store on
-  // /media/internal and outlives the webview's localStorage (wiped by a
-  // reinstall), so a session can be valid while the stored credentials — and
-  // with them the username — are gone. Anything gated on "is there a
-  // server-side library to sync with" must use this, not isLoggedIn().
+  // isLoggedIn(): the auth cookie lives in the JS service's own store, not in
+  // the webview's localStorage, so the two can diverge — a session can be
+  // valid while the stored credentials, and with them the username, are gone.
+  // Anything gated on "is there a server-side library to sync with" must use
+  // this, not isLoggedIn().
   hasAccountSession() {
     return this._accountSession;
   },
@@ -149,8 +149,8 @@ export const AuthManager = {
       const creds = this.getStoredCredentials();
       if (!ignorePersisted && await api.hasPersistedSession() && await api.verifySession()) {
         // The cookie proves the account session even when the credentials are
-        // gone (reinstall wipes localStorage, not the service's cookie store)
-        // — the username is simply unknown then.
+        // gone (the service's cookie store and the webview's localStorage are
+        // separate stores) — the username is simply unknown then.
         this.loggedInUser = creds?.username || null;
         this._accountSession = true;
         return true;
