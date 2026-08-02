@@ -13,7 +13,10 @@ js/core/i18n.js
 js/core/network/decotvClient.js
 js/core/network/lunaTransport.js
 js/core/network/sourceRanking.js
+js/core/playback/adSkipDetector.js
+js/core/playback/adSkipScanner.js
 js/core/playback/stallDetector.js
+js/core/playback/tsResolution.js
 js/core/storage/librarySync.js
 js/core/storage/localLibrary.js
 js/core/storage/localStore.js
