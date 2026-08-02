@@ -39,10 +39,9 @@ import {
 const ICONS = {
   play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>',
   pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>',
-  // Skip back 30s (double left triangle)
-  rewind: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 6 L5 12 L11 18 Z M18 6 L12 12 L18 18 Z"/></svg>',
-  // Skip forward 30s (double right triangle)
-  forward: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 6 L19 12 L13 18 Z M6 6 L12 12 L6 18 Z"/></svg>'
+  // Previous / next episode (skip-previous / skip-next).
+  prevEp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h2v14H5zM18 6l-9 6 9 6z"/></svg>',
+  nextEp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l9 6-9 6zM17 5h2v14h-2z"/></svg>'
 };
 
 export const PlayerScreen = {
@@ -75,6 +74,7 @@ export const PlayerScreen = {
   _stallArmed: false,     // only watch the clock once this load has actually played a frame
   _adSkip: null,          // pre-scan ranges + live fallback; see adSkipDetector.js
   _adScanAbort: null,     // AbortController for in-flight playlist pre-scan
+  _outroTriggered: false, // one-shot guard for the current episode's auto-advance
 
   async mount(params = {}) {
     this.container = document.getElementById("player");
@@ -105,6 +105,7 @@ export const PlayerScreen = {
     this._stallArmed = false;
     this._adSkip = initialAdSkipState();
     this._adScanAbort = null;
+    this._outroTriggered = false;
 
     this.container.innerHTML = `
       <video id="videoPlayer" autoplay playsinline webkit-playsinline preload="auto"
@@ -149,8 +150,9 @@ export const PlayerScreen = {
     const wrap = this.container.querySelector("#playerButtons");
     const defs = [
       { action: "playPause", label: this.paused ? ICONS.play : ICONS.pause },
-      { action: "seekBack", label: ICONS.rewind },
-      { action: "seekFwd", label: ICONS.forward },
+      { action: "prevEp", label: ICONS.prevEp, disabled: this.episodes.length <= 1 || this.index <= 0 },
+      { action: "nextEp", label: ICONS.nextEp, disabled: this.episodes.length <= 1 || this.index >= this.episodes.length - 1 },
+      { action: "markOutro", label: "标记片尾", text: true, active: Boolean(this._getOutroMark()), disabled: this.episodes.length <= 1 },
       { action: "sourcePanel", label: "换源", text: true, active: this.sourcePanelVisible, disabled: this.allSources.length <= 1 },
       { action: "episodePanel", label: "列表", text: true, active: this.episodePanelVisible, disabled: this.episodes.length <= 1 },
       { action: "back", label: "返回", text: true }
@@ -222,7 +224,7 @@ export const PlayerScreen = {
     const token = ++this._playToken;
     // Switching episodes (panel pick / auto-advance): persist the outgoing
     // episode first, then start the new one from the beginning (no resume).
-    const switching = this._resumeApplied;
+    const switching = this._resumeApplied || idx !== this.index;
     if (switching) {
       this._saveRecord(true);
       this.resumeTime = 0;
@@ -230,6 +232,9 @@ export const PlayerScreen = {
     }
     this.index = idx;
     this.episodePanelIndex = idx;
+    this._outroTriggered = false;
+    // Episode boundaries change which prev/next buttons are available.
+    this._renderButtons();
     // Fresh episode/source — cancel any prior ad pre-scan and start clean.
     this._cancelAdScan();
     this._adSkip = initialAdSkipState();
@@ -387,6 +392,24 @@ export const PlayerScreen = {
     }
     this._checkStall(v);
     this._checkAdSkip(v);
+    this._checkOutroMark(v);
+  },
+
+  _checkOutroMark(v) {
+    if (this._isExiting || this._outroTriggered) return;
+    if (this.episodes.length <= 1 || this.index >= this.episodes.length - 1) return;
+    if (this.paused || v.paused || v.seeking || v.ended) return;
+
+    const duration = Number(v.duration);
+    const currentTime = Number(v.currentTime);
+    const mark = this._getOutroMark();
+    if (!Number.isFinite(currentTime) || !this._isValidOutroMark(mark, duration)) return;
+    const fromEnd = Number(mark.fromEnd);
+    if (currentTime < duration - fromEnd) return;
+
+    this._outroTriggered = true;
+    showToast("已跳过片尾");
+    this._playIndex(this.index + 1);
   },
 
   // Prefer pre-scanned ad ranges (one seek to range.end). Fall back to live
@@ -594,6 +617,70 @@ export const PlayerScreen = {
     if (!this.video || !this.video.duration) return;
     this.video.currentTime = Math.max(0, Math.min(this.video.duration, this.video.currentTime + delta));
     this.setControlsVisible(true);
+  },
+
+  _outroMarkKey() {
+    const meta = this.recordMeta || {};
+    const title = meta.title || this.params?.title || "";
+    const year = meta.year || this.params?.year || "";
+    if (!String(title).trim()) return "";
+    return LocalLibrary.recordKeyForTitle(title, year);
+  },
+
+  _getOutroMark() {
+    const key = this._outroMarkKey();
+    return key ? LocalLibrary.getOutroMark(key) : null;
+  },
+
+  _isValidOutroMark(mark, duration) {
+    const fromEnd = Number(mark?.fromEnd);
+    const dur = Number(duration);
+    return Number.isFinite(fromEnd)
+      && fromEnd >= 1
+      && Number.isFinite(dur)
+      && dur > 0
+      && fromEnd <= dur * 0.5;
+  },
+
+  _toggleOutroMark() {
+    if (this.episodes.length <= 1) return;
+    const key = this._outroMarkKey();
+    const v = this.video;
+    const duration = Number(v?.duration);
+    const currentTime = Number(v?.currentTime);
+    if (!key || !Number.isFinite(duration) || duration <= 0 || !Number.isFinite(currentTime)) {
+      showToast("片尾标记暂不可用");
+      return;
+    }
+
+    const existing = LocalLibrary.getOutroMark(key);
+    if (this._isValidOutroMark(existing, duration)
+      && currentTime >= duration - Number(existing.fromEnd)) {
+      LocalLibrary.deleteOutroMark(key);
+      showToast("已取消片尾标记");
+    } else {
+      const fromEnd = duration - currentTime;
+      if (!this._isValidOutroMark({ fromEnd }, duration)) {
+        showToast("标记位置需距片尾至少 1 秒");
+        return;
+      }
+      LocalLibrary.saveOutroMark(key, { fromEnd, markedAt: Date.now() });
+      showToast("已标记片尾，本剧各集播到此处自动下一集");
+    }
+    this._renderButtons();
+    this.setControlsVisible(true);
+  },
+
+  _playPreviousEpisode() {
+    if (this.episodes.length <= 1 || this.index <= 0) return;
+    this.setControlsVisible(true);
+    this._playIndex(this.index - 1);
+  },
+
+  _playNextEpisode() {
+    if (this.episodes.length <= 1 || this.index >= this.episodes.length - 1) return;
+    this.setControlsVisible(true);
+    this._playIndex(this.index + 1);
   },
 
   _toggleSourcePanel() {
@@ -834,6 +921,13 @@ export const PlayerScreen = {
       return;
     }
 
+    if (code === 33 || code === 34) {
+      event.preventDefault?.();
+      if (code === 33) this._playPreviousEpisode();
+      else this._playNextEpisode();
+      return;
+    }
+
     // No panel: controls area vs button area navigation.
     const focusedBtn = this.container.querySelector(".player-control-btn.focused");
 
@@ -890,8 +984,9 @@ export const PlayerScreen = {
   _performControlAction(action) {
     switch (action) {
       case "playPause": this._togglePlayPause(); break;
-      case "seekBack": this._seek(-30); break;
-      case "seekFwd": this._seek(30); break;
+      case "prevEp": this._playPreviousEpisode(); break;
+      case "nextEp": this._playNextEpisode(); break;
+      case "markOutro": this._toggleOutroMark(); break;
       case "sourcePanel": this._toggleSourcePanel(); break;
       case "episodePanel": this._toggleEpisodePanel(); break;
       case "back": this._stopAndExit(); break;

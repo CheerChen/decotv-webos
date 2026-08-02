@@ -701,15 +701,10 @@ export const DetailScreen = {
         const src = this.sources.find((s) => getSourceProbeKey(s) === key);
         if (!src) return;
         this.currentSource = src;
-        this.episodeIndex = 0;
-        this.detail = null;
-        if (src.poster) this._setPoster(src.poster);
-        this._renderHeroMeta();
-        this._renderSourceList();
-        this._renderEpisodes();
-        this._setStatus(`已切换到「${escapeHtml(src.source_name || src.source)}」`);
-        // Pull probe results for this source's episodes if missing.
-        this._maybeFetchDetail();
+        // Keep Back → detail restoration aligned with the source the user just
+        // chose before leaving this screen for playback.
+        this._saveCache();
+        await this._startPlayback(src, 0, { preferResume: true });
         return;
       }
       if (action === "favorite") { await this._toggleFavorite(); return; }

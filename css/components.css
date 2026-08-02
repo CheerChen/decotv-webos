@@ -373,7 +373,7 @@
   display: block;
 }
 
-/* Text controls (换源/列表/返回) use a pill instead of a fixed circle. */
+/* Text controls (标记片尾/换源/列表/返回) use a pill instead of a fixed circle. */
 .player-control-btn-text {
   width: auto;
   min-width: 88px;

@@ -30,6 +30,30 @@ const rec = (over = {}) => ({
   index: 1, play_time: 100, total_time: 7200, save_time: 1000, ...over,
 });
 
+describe("local outro marks", () => {
+  beforeEach(() => store.clear());
+
+  test("use the per-title key and stay separate from play-record replacement", () => {
+    const key = LocalLibrary.recordKeyForTitle("流浪地球2", "2023");
+    LocalLibrary.saveOutroMark(key, { fromEnd: 42, markedAt: 123 });
+    LocalLibrary.replaceRecords({ "流浪地球2|2023": rec() });
+
+    assert.deepEqual(LocalLibrary.getOutroMark(key), { fromEnd: 42, markedAt: 123 });
+    assert.deepEqual(LocalLibrary.getOutroMarks(), {
+      "流浪地球2|2023": { fromEnd: 42, markedAt: 123 }
+    });
+  });
+
+  test("delete only removes the selected title mark", () => {
+    LocalLibrary.saveOutroMark("a|2020", { fromEnd: 10, markedAt: 1 });
+    LocalLibrary.saveOutroMark("b|2021", { fromEnd: 20, markedAt: 2 });
+    LocalLibrary.deleteOutroMark("a|2020");
+
+    assert.equal(LocalLibrary.getOutroMark("a|2020"), null);
+    assert.deepEqual(LocalLibrary.getOutroMark("b|2021"), { fromEnd: 20, markedAt: 2 });
+  });
+});
+
 describe("foldServerRecords", () => {
   test("per-source server keys collapse onto one per-title entry", () => {
     const folded = foldServerRecords({

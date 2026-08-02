@@ -14,6 +14,7 @@ import { LocalStore } from "./localStore.js";
 
 const FAVORITES_KEY = "decotv.local.favorites";
 const RECORDS_KEY = "decotv.local.playRecords";
+const OUTRO_MARKS_KEY = "decotv.local.outroMarks";
 const RECORDS_MIGRATED_KEY = "decotv.local.playRecords.migratedVersion";
 
 // Storage schema version — decoupled from app version. Bump this when the
@@ -113,5 +114,40 @@ export const LocalLibrary = {
 
   replaceRecords(all) {
     LocalStore.set(RECORDS_KEY, all || {});
+  },
+
+  // ── Outro marks ──────────────────────────────────────────────────────────
+  // Shape: { "title|year": { fromEnd, markedAt } }
+  // These are intentionally separate from play records: librarySync replaces
+  // the record map with the server's copy, while outro marks are local-only.
+  getOutroMarks() {
+    return LocalStore.get(OUTRO_MARKS_KEY, {}) || {};
+  },
+
+  getOutroMark(key) {
+    if (!key) return null;
+    return this.getOutroMarks()[key] || null;
+  },
+
+  saveOutroMark(key, mark) {
+    if (!key) return { ok: false };
+    const fromEnd = Number(mark?.fromEnd);
+    if (!Number.isFinite(fromEnd)) return { ok: false };
+    const markedAt = Number(mark?.markedAt);
+    const all = this.getOutroMarks();
+    all[key] = {
+      fromEnd,
+      markedAt: Number.isFinite(markedAt) ? markedAt : now()
+    };
+    LocalStore.set(OUTRO_MARKS_KEY, all);
+    return { ok: true };
+  },
+
+  deleteOutroMark(key) {
+    if (!key) { LocalStore.remove(OUTRO_MARKS_KEY); return { ok: true }; }
+    const all = this.getOutroMarks();
+    delete all[key];
+    LocalStore.set(OUTRO_MARKS_KEY, all);
+    return { ok: true };
   }
 };
