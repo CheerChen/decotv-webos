@@ -5,32 +5,43 @@ import { ScreenUtils } from "../../navigation/screen.js";
 import { Router } from "../../navigation/router.js";
 import { api } from "../../../core/network/decotvClient.js";
 import { LocalLibrary } from "../../../core/storage/localLibrary.js";
+import { LibrarySync } from "../../../core/storage/librarySync.js";
 import { showToast } from "../../toast.js";
 import { escapeHtml, escapeAttr, formatTime } from "../../utils.js";
 
 // How often playback progress is persisted to /api/playrecords while watching.
 const RECORD_SAVE_INTERVAL_MS = 10000;
 import {
-  comparePlaybackMetrics,
   getSourceProbeKey,
-  isPlayableFallbackResult,
-  isVerifiedPlaybackResult
+  isVerifiedPlaybackResult,
+  rankSourcesByProbe,
+  pickBestAvailableSource
 } from "../../../core/network/sourceRanking.js";
 import {
   initialStallState,
   nextStallState,
   isStalled
 } from "../../../core/playback/stallDetector.js";
+import {
+  initialAdSkipState,
+  observeAdSkip,
+  applyScanResult,
+  markScanRunning,
+  markScanFailed
+} from "../../../core/playback/adSkipDetector.js";
+import {
+  scanAdRanges,
+  isHlsPlayUrl
+} from "../../../core/playback/adSkipScanner.js";
 
 // Monochrome inline SVG glyphs (inherit button color via currentColor) —
 // replaces the colored system emoji that rendered as ugly yellow icons.
 const ICONS = {
   play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>',
   pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>',
-  // Skip back 30s (double left triangle)
-  rewind: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 6 L5 12 L11 18 Z M18 6 L12 12 L18 18 Z"/></svg>',
-  // Skip forward 30s (double right triangle)
-  forward: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 6 L19 12 L13 18 Z M6 6 L12 12 L6 18 Z"/></svg>'
+  // Previous / next episode (skip-previous / skip-next).
+  prevEp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h2v14H5zM18 6l-9 6 9 6z"/></svg>',
+  nextEp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l9 6-9 6zM17 5h2v14h-2z"/></svg>'
 };
 
 export const PlayerScreen = {
@@ -61,6 +72,9 @@ export const PlayerScreen = {
   _playToken: 0,          // race guard: each _playIndex call gets a token; stale async results are discarded
   _stall: null,           // stallDetector state; see _tick
   _stallArmed: false,     // only watch the clock once this load has actually played a frame
+  _adSkip: null,          // pre-scan ranges + live fallback; see adSkipDetector.js
+  _adScanAbort: null,     // AbortController for in-flight playlist pre-scan
+  _outroTriggered: false, // one-shot guard for the current episode's auto-advance
 
   async mount(params = {}) {
     this.container = document.getElementById("player");
@@ -89,6 +103,9 @@ export const PlayerScreen = {
     this._playToken = 0;
     this._stall = initialStallState();
     this._stallArmed = false;
+    this._adSkip = initialAdSkipState();
+    this._adScanAbort = null;
+    this._outroTriggered = false;
 
     this.container.innerHTML = `
       <video id="videoPlayer" autoplay playsinline webkit-playsinline preload="auto"
@@ -106,6 +123,7 @@ export const PlayerScreen = {
           <div class="player-controls-bottom">
             <div class="player-progress-track" id="playerProgress">
               <div class="player-progress-fill" id="playerProgressFill"></div>
+              <div class="player-progress-outro" id="playerProgressOutro" style="display:none;"></div>
               <div class="player-progress-thumb" id="playerProgressThumb"></div>
             </div>
             <div class="player-controls-row">
@@ -131,18 +149,37 @@ export const PlayerScreen = {
 
   _renderButtons() {
     const wrap = this.container.querySelector("#playerButtons");
+    // Standard transport cluster (⏮ ⏯ ⏭) first, text pills by usage frequency.
+    // markOutro sits at the far end: it is the rarest action and the one where
+    // an accidental press is most annoying. Its "marked" state lives on the
+    // progress bar (see _updateOutroMarker), never on the button — a solid
+    // fill on the bar is reserved for focus and nothing else.
     const defs = [
+      { action: "prevEp", label: ICONS.prevEp, disabled: this.episodes.length <= 1 || this.index <= 0 },
       { action: "playPause", label: this.paused ? ICONS.play : ICONS.pause },
-      { action: "seekBack", label: ICONS.rewind },
-      { action: "seekFwd", label: ICONS.forward },
-      { action: "sourcePanel", label: "换源", text: true, active: this.sourcePanelVisible, disabled: this.allSources.length <= 1 },
+      { action: "nextEp", label: ICONS.nextEp, disabled: this.episodes.length <= 1 || this.index >= this.episodes.length - 1 },
       { action: "episodePanel", label: "列表", text: true, active: this.episodePanelVisible, disabled: this.episodes.length <= 1 },
-      { action: "back", label: "返回", text: true }
+      { action: "sourcePanel", label: "换源", text: true, active: this.sourcePanelVisible, disabled: this.allSources.length <= 1 },
+      { action: "markOutro", label: "标记片尾", text: true, disabled: this.episodes.length <= 1 }
     ];
+    // Rebuilding innerHTML drops the .focused class; without restoring it the
+    // next left/right lands in the video zone and seeks — the "phantom focus"
+    // misoperation. Carry focus across the rebuild (fall back to play/pause
+    // when the previously focused button became disabled, e.g. nextEp on the
+    // last episode).
+    const focusedCtrl = wrap.querySelector(".player-control-btn.focused")?.dataset?.ctrl || null;
     wrap.innerHTML = defs.map((d) => `
       <button class="player-control-btn${d.text ? " player-control-btn-text" : ""}${d.active ? " active" : ""}${d.disabled ? "" : " focusable"}"
         data-ctrl="${d.action}" ${d.disabled ? "disabled" : ""}>${d.label}</button>
     `).join("");
+    if (focusedCtrl) {
+      const target = wrap.querySelector(`.player-control-btn.focusable[data-ctrl="${focusedCtrl}"]`)
+        || wrap.querySelector('.player-control-btn[data-ctrl="playPause"]');
+      if (target) {
+        target.classList.add("focused");
+        target.focus();
+      }
+    }
   },
 
   _bindVideo() {
@@ -206,7 +243,7 @@ export const PlayerScreen = {
     const token = ++this._playToken;
     // Switching episodes (panel pick / auto-advance): persist the outgoing
     // episode first, then start the new one from the beginning (no resume).
-    const switching = this._resumeApplied;
+    const switching = this._resumeApplied || idx !== this.index;
     if (switching) {
       this._saveRecord(true);
       this.resumeTime = 0;
@@ -214,6 +251,12 @@ export const PlayerScreen = {
     }
     this.index = idx;
     this.episodePanelIndex = idx;
+    this._outroTriggered = false;
+    // Episode boundaries change which prev/next buttons are available.
+    this._renderButtons();
+    // Fresh episode/source — cancel any prior ad pre-scan and start clean.
+    this._cancelAdScan();
+    this._adSkip = initialAdSkipState();
     const rawUrl = this.episodes[idx];
     this.container.querySelector("#playerLoading")?.classList.remove("hidden");
 
@@ -251,6 +294,47 @@ export const PlayerScreen = {
       playPromise.catch(() => { /* autoplay restriction — user must press play */ });
     }
     this._updateMeta();
+    // Background: probe discontinuity groups so mid-roll ads can be skipped in
+    // one seek. Does not block play — watch for startup jank from the extra GETs.
+    this._startAdScan(playUrl, token);
+  },
+
+  _cancelAdScan() {
+    if (this._adScanAbort) {
+      try { this._adScanAbort.abort(); } catch (_) {}
+      this._adScanAbort = null;
+    }
+  },
+
+  _startAdScan(playUrl, token) {
+    if (!isHlsPlayUrl(playUrl)) return;
+    this._cancelAdScan();
+    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    this._adScanAbort = ctrl;
+    this._adSkip = markScanRunning(this._adSkip || initialAdSkipState());
+    const started = Date.now();
+    scanAdRanges(playUrl, { signal: ctrl?.signal, concurrency: 2 })
+      .then((result) => {
+        if (token !== this._playToken) return;
+        this._adSkip = applyScanResult(this._adSkip || initialAdSkipState(), result);
+        console.info("[DecoTV] ad pre-scan", JSON.stringify({
+          ranges: result.ranges?.length || 0,
+          groups: result.groups,
+          probed: result.probed,
+          elapsedMs: result.elapsedMs,
+          baseline: result.baseline,
+          wallMs: Date.now() - started
+        }));
+      })
+      .catch((err) => {
+        if (token !== this._playToken) return;
+        if (err?.name === "AbortError") return;
+        this._adSkip = markScanFailed(this._adSkip || initialAdSkipState());
+        console.warn("[DecoTV] ad pre-scan failed", err?.message || err);
+      })
+      .finally(() => {
+        if (this._adScanAbort === ctrl) this._adScanAbort = null;
+      });
   },
 
   // Check if URL is already a direct media stream (m3u8/mp4/etc) that <video>
@@ -326,6 +410,70 @@ export const PlayerScreen = {
       if (now - this._lastSaveAt >= RECORD_SAVE_INTERVAL_MS) this._saveRecord();
     }
     this._checkStall(v);
+    this._checkAdSkip(v);
+    this._checkOutroMark(v);
+    this._updateOutroMarker(v);
+  },
+
+  // The outro mark is a fact about the timeline, so it is drawn on the
+  // timeline: a tick + tinted zone from the trigger point to the end.
+  // Kept in _tick because duration arrives late and changes per episode.
+  _updateOutroMarker(v) {
+    const el = this.container.querySelector("#playerProgressOutro");
+    if (!el) return;
+    const duration = Number(v?.duration);
+    const mark = this._getOutroMark();
+    if (this.episodes.length <= 1 || !this._isValidOutroMark(mark, duration)) {
+      el.style.display = "none";
+      return;
+    }
+    const pct = Math.max(0, Math.min(100, (1 - Number(mark.fromEnd) / duration) * 100));
+    el.style.left = `${pct}%`;
+    el.style.display = "block";
+  },
+
+  _checkOutroMark(v) {
+    if (this._isExiting || this._outroTriggered) return;
+    if (this.episodes.length <= 1 || this.index >= this.episodes.length - 1) return;
+    if (this.paused || v.paused || v.seeking || v.ended) return;
+
+    const duration = Number(v.duration);
+    const currentTime = Number(v.currentTime);
+    const mark = this._getOutroMark();
+    if (!Number.isFinite(currentTime) || !this._isValidOutroMark(mark, duration)) return;
+    const fromEnd = Number(mark.fromEnd);
+    if (currentTime < duration - fromEnd) return;
+
+    this._outroTriggered = true;
+    showToast("已跳过片尾");
+    this._playIndex(this.index + 1);
+  },
+
+  // Prefer pre-scanned ad ranges (one seek to range.end). Fall back to live
+  // videoWidth/Height outlier crawl only when the scan found nothing.
+  _checkAdSkip(v) {
+    if (this._isExiting || !this._adSkip) return;
+    const result = observeAdSkip(this._adSkip, {
+      w: v.videoWidth || 0,
+      h: v.videoHeight || 0,
+      currentTime: v.currentTime || 0,
+      duration: v.duration || 0,
+      paused: v.paused,
+      seeking: v.seeking,
+      ended: v.ended,
+      now: Date.now()
+    });
+    this._adSkip = result.state;
+    const action = result.action;
+    if (!action) return;
+    if (action.toast) showToast(action.toast, 2200);
+    if (action.type === "seek" && Number.isFinite(action.to)) {
+      if (action.to > (v.currentTime || 0) + 0.25) {
+        try {
+          v.currentTime = action.to;
+        } catch (_) { /* ignore seek errors on closed pipelines */ }
+      }
+    }
   },
 
   // Watch for playback that reports itself as running while the clock stands
@@ -398,16 +546,23 @@ export const PlayerScreen = {
     // always resumes by title regardless of which source was used.
     const key = LocalLibrary.recordKeyForTitle(m.title, m.year);
     // index is 1-based (episode number), matching the DecoTV record convention.
-    LocalLibrary.savePlayRecord(key, {
+    // source/id are stored alongside even though the local key does not use
+    // them: the server keys records per source, so without them a record can
+    // never be mirrored (see librarySync.js).
+    const record = {
       title: m.title,
       cover: m.cover || "",
       source_name: m.source_name || m.source,
+      source: m.source || "",
+      id: m.id || "",
       year: m.year || "",
       index: this.index + 1,
       total_episodes: m.total_episodes || this.episodes.length,
       play_time: cur,
       total_time: dur
-    });
+    };
+    LocalLibrary.savePlayRecord(key, record);
+    LibrarySync.pushRecord({ ...record, save_time: Date.now() });
   },
 
   _handleEnded() {
@@ -434,11 +589,13 @@ export const PlayerScreen = {
     const failedCount = this.failedSourceKeys.size;
     const total = this.allSources.length;
     console.error(`[DecoTV] ${errLabel} on "${srcName}" (${failedCount}/${total} failed)`, debug);
-    // Find next source that hasn't failed yet.
-    const next = this.allSources.find((s) => {
-      const key = getSourceProbeKey(s);
-      return !this.failedSourceKeys.has(key);
-    });
+    // Search order is not a quality ranking. Pick the best measured source
+    // that has not failed instead of taking the first remaining result.
+    const next = pickBestAvailableSource(
+      this.allSources,
+      this.probeResults,
+      this.failedSourceKeys
+    );
     if (next) {
       const key = getSourceProbeKey(next);
       showToast(`${errLabel} · ${srcName} → 换源`);
@@ -481,8 +638,19 @@ export const PlayerScreen = {
   _resetControlsAutoHide() {
     if (this.controlsHideTimer) clearTimeout(this.controlsHideTimer);
     this.controlsHideTimer = setTimeout(() => {
-      // Auto-hide only when playing and no panel open.
-      if (!this.paused && !this.episodePanelVisible && !this.sourcePanelVisible) this.setControlsVisible(false);
+      this.controlsHideTimer = null;
+      // The floating source/episode panel follows the same five-second timer
+      // as the playback bar. Keep both visible while paused.
+      if (this.paused) return;
+      const hadPanel = this.episodePanelVisible || this.sourcePanelVisible;
+      this.episodePanelVisible = false;
+      this.sourcePanelVisible = false;
+      if (hadPanel) {
+        this.container.querySelector("#playerEpisodePanel")?.remove();
+        this.container.querySelector("#playerSourcePanel")?.remove();
+        this._renderButtons();
+      }
+      this.setControlsVisible(false);
     }, 5000);
   },
 
@@ -497,6 +665,72 @@ export const PlayerScreen = {
     if (!this.video || !this.video.duration) return;
     this.video.currentTime = Math.max(0, Math.min(this.video.duration, this.video.currentTime + delta));
     this.setControlsVisible(true);
+  },
+
+  _outroMarkKey() {
+    const meta = this.recordMeta || {};
+    const title = meta.title || this.params?.title || "";
+    const year = meta.year || this.params?.year || "";
+    if (!String(title).trim()) return "";
+    return LocalLibrary.recordKeyForTitle(title, year);
+  },
+
+  _getOutroMark() {
+    const key = this._outroMarkKey();
+    return key ? LocalLibrary.getOutroMark(key) : null;
+  },
+
+  _isValidOutroMark(mark, duration) {
+    const fromEnd = Number(mark?.fromEnd);
+    const dur = Number(duration);
+    return Number.isFinite(fromEnd)
+      && fromEnd >= 1
+      && Number.isFinite(dur)
+      && dur > 0
+      && fromEnd <= dur * 0.5;
+  },
+
+  _toggleOutroMark() {
+    if (this.episodes.length <= 1) return;
+    const key = this._outroMarkKey();
+    const v = this.video;
+    const duration = Number(v?.duration);
+    const currentTime = Number(v?.currentTime);
+    if (!key || !Number.isFinite(duration) || duration <= 0 || !Number.isFinite(currentTime)) {
+      showToast("片尾标记暂不可用");
+      return;
+    }
+
+    const existing = LocalLibrary.getOutroMark(key);
+    if (this._isValidOutroMark(existing, duration)
+      && currentTime >= duration - Number(existing.fromEnd)) {
+      LocalLibrary.deleteOutroMark(key);
+      showToast("已取消片尾标记");
+    } else {
+      const fromEnd = duration - currentTime;
+      if (!this._isValidOutroMark({ fromEnd }, duration)) {
+        showToast("标记位置需距片尾至少 1 秒");
+        return;
+      }
+      LocalLibrary.saveOutroMark(key, { fromEnd, markedAt: Date.now() });
+      showToast("已标记片尾，本剧各集播到此处自动下一集");
+    }
+    // No button re-render: the mark state is drawn on the progress bar, and
+    // rebuilding the buttons here is what used to silently drop focus.
+    this._updateOutroMarker(this.video);
+    this.setControlsVisible(true);
+  },
+
+  _playPreviousEpisode() {
+    if (this.episodes.length <= 1 || this.index <= 0) return;
+    this.setControlsVisible(true);
+    this._playIndex(this.index - 1);
+  },
+
+  _playNextEpisode() {
+    if (this.episodes.length <= 1 || this.index >= this.episodes.length - 1) return;
+    this.setControlsVisible(true);
+    this._playIndex(this.index + 1);
   },
 
   _toggleSourcePanel() {
@@ -518,14 +752,7 @@ export const PlayerScreen = {
   _renderSourcePanel() {
     this.container.querySelector("#playerSourcePanel")?.remove();
     // Sort sources by probe result (best first), unprobed at end.
-    const ranked = [...this.allSources].sort((a, b) => {
-      const ra = this.probeResults.get(getSourceProbeKey(a));
-      const rb = this.probeResults.get(getSourceProbeKey(b));
-      if (!ra && !rb) return 0;
-      if (!ra) return 1;
-      if (!rb) return -1;
-      return comparePlaybackMetrics(ra, rb);
-    });
+    const ranked = rankSourcesByProbe(this.allSources, this.probeResults);
     const panel = document.createElement("div");
     panel.id = "playerSourcePanel";
     panel.className = "player-side-panel";
@@ -744,6 +971,13 @@ export const PlayerScreen = {
       return;
     }
 
+    if (code === 33 || code === 34) {
+      event.preventDefault?.();
+      if (code === 33) this._playPreviousEpisode();
+      else this._playNextEpisode();
+      return;
+    }
+
     // No panel: controls area vs button area navigation.
     const focusedBtn = this.container.querySelector(".player-control-btn.focused");
 
@@ -762,14 +996,9 @@ export const PlayerScreen = {
       return;
     }
 
-    // Up → if on buttons, go back to video area (unfocus). Otherwise seek +30.
+    // Up → open the episode list instead of controlling seek.
     if (code === 38) {
-      if (focusedBtn) {
-        focusedBtn.classList.remove("focused");
-        this._resetControlsAutoHide();
-        return;
-      }
-      this._seek(30);
+      this._toggleEpisodePanel();
       return;
     }
 
@@ -800,11 +1029,11 @@ export const PlayerScreen = {
   _performControlAction(action) {
     switch (action) {
       case "playPause": this._togglePlayPause(); break;
-      case "seekBack": this._seek(-30); break;
-      case "seekFwd": this._seek(30); break;
+      case "prevEp": this._playPreviousEpisode(); break;
+      case "nextEp": this._playNextEpisode(); break;
+      case "markOutro": this._toggleOutroMark(); break;
       case "sourcePanel": this._toggleSourcePanel(); break;
       case "episodePanel": this._toggleEpisodePanel(); break;
-      case "back": this._stopAndExit(); break;
     }
   },
 
@@ -844,6 +1073,7 @@ export const PlayerScreen = {
   },
 
   cleanup() {
+    this._cancelAdScan();
     // Persist final position before tearing the video down.
     this._saveRecord(true);
     if (this.tickTimer) { clearInterval(this.tickTimer); this.tickTimer = null; }

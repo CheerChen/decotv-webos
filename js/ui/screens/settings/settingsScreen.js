@@ -6,6 +6,7 @@ import { AuthManager } from "../../../core/auth/authManager.js";
 import { api, STORAGE_BASEURL } from "../../../core/network/decotvClient.js";
 import { LocalStore } from "../../../core/storage/localStore.js";
 import { LocalLibrary } from "../../../core/storage/localLibrary.js";
+import { LibrarySync } from "../../../core/storage/librarySync.js";
 import { showToast } from "../../toast.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
 import { escapeHtml } from "../../utils.js";
@@ -126,6 +127,8 @@ export const SettingsScreen = {
       }
       if (action === "clear-records") {
         LocalLibrary.deletePlayRecord(null);
+        // Clear the server too, otherwise the next pull hands them all back.
+        LibrarySync.clearRecords();
         showToast(t("settings.clearedRecords"));
         return;
       }

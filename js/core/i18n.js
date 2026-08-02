@@ -68,8 +68,6 @@ const DICT = {
     "settings.storageType": "存储模式",
     "settings.authMode": "认证模式",
 
-    "auth.unknownMode": "未知",
-    "auth.nonPublicMode": "该服务器为「{mode}」模式，本应用仅支持 public（公开）模式的 DecoTV 服务器。请将服务器 AuthMode 设为 public 后重试。",
     "auth.badCredentials": "凭据无效",
     "auth.cannotConnect": "无法连接到服务器",
 
@@ -128,8 +126,6 @@ const DICT = {
     "settings.storageType": "Storage mode",
     "settings.authMode": "Auth mode",
 
-    "auth.unknownMode": "unknown",
-    "auth.nonPublicMode": "This server runs in “{mode}” mode. DecoTV for webOS only supports servers in public mode. Set AuthMode to public and try again.",
     "auth.badCredentials": "Invalid credentials",
     "auth.cannotConnect": "Cannot reach the server",
 

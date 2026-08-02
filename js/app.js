@@ -5,7 +5,9 @@ import { FocusEngine } from "./ui/navigation/focusEngine.js";
 import { AuthManager, AuthState } from "./core/auth/authManager.js";
 import { api } from "./core/network/decotvClient.js";
 import { LocalLibrary, SCHEMA_VERSION } from "./core/storage/localLibrary.js";
+import { LibrarySync } from "./core/storage/librarySync.js";
 import { t, applyDocumentLang } from "./core/i18n.js";
+import { watchPosters } from "./ui/posterImage.js";
 
 import { SplashScreen } from "./ui/screens/splash/splashScreen.js";
 import { ServerScreen } from "./ui/screens/server/serverScreen.js";
@@ -38,6 +40,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   LocalLibrary.migrateRecordsIfNeeded();
   Router.init();
   FocusEngine.init(Router);
+  // Posters are fetched by the JS service and swapped in as they arrive; see
+  // posterImage.js for why the webview cannot load them itself.
+  watchPosters();
   // CDP live-debug / screenshot helpers (window is file:// origin on device).
   window.__router = Router;
   window.__focusEngine = FocusEngine;
@@ -47,6 +52,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   // browsing anonymously must not bounce the user back to home.
   api.setUnauthorizedHandler(() => {
     AuthManager.ensureSession();
+  });
+
+  // Library mirroring is tied to having a real account: anonymous browsing on a
+  // public server has no server-side library to sync with, and every call would
+  // 401. isLoggedIn is passed as a callback rather than imported inside
+  // librarySync so that module stays free of auth state and unit-testable.
+  LibrarySync.configure({
+    api,
+    isEnabled: () => AuthManager.isLoggedIn(),
+    onPulled: () => Router.getCurrentScreen()?.refreshLibraryData?.()
   });
 
   AuthManager.subscribe((state, extra) => {
@@ -62,6 +77,11 @@ document.addEventListener("DOMContentLoaded", async () => {
         break;
       case AuthState.AUTHENTICATED:
         Router.navigate("home", {}, { replaceHistory: true });
+        // Not awaited: home renders its "continue watching" row from the local
+        // store straight away and refreshes it if the pull changes anything.
+        // Blocking the first paint on two API calls to save a re-render would
+        // be a poor trade.
+        LibrarySync.pull();
         break;
       case AuthState.ERROR:
         Router.navigate("server", { error: extra?.error || t("app.unknownError") }, { replaceHistory: true });

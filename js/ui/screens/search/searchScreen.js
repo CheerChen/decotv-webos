@@ -15,6 +15,7 @@ import { ScreenUtils } from "../../navigation/screen.js";
 import { Router } from "../../navigation/router.js";
 import { api } from "../../../core/network/decotvClient.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
+import { posterAttrs } from "../../posterImage.js";
 import { escapeHtml } from "../../utils.js";
 
 const PAGE_SIZE = 24;
@@ -325,6 +326,9 @@ export const SearchScreen = {
     this.container = document.getElementById("search");
     this.results = [];
     this.type = params.type || "hot-movie";
+    // Digit shortcuts request first-cover focus; tab clicks leave the default
+    // (filter chip) so D-pad filter browsing is unchanged.
+    this.focusFirstItem = Boolean(params.focusFirstItem);
     const cfg = TYPE_CONFIGS[this.type] || TYPE_CONFIGS["hot-movie"];
     // Initialize filter values to defaults.
     this.filterValues = {};
@@ -385,12 +389,16 @@ export const SearchScreen = {
 
     wrap.innerHTML = rows.join("") + weekdayHtml;
 
-    // Default focus: first active filter chip, or first chip.
-    const defaultFocus = wrap.querySelector('[data-action="select-filter"].active') || wrap.querySelector('[data-action="select-filter"]') || wrap.querySelector('[data-action="select-weekday"]');
-    if (defaultFocus) {
-      this.container.querySelectorAll(".focused").forEach((n) => n.classList.remove("focused"));
-      defaultFocus.classList.add("focused");
-      defaultFocus.focus();
+    // Default focus: first active filter chip, or first chip. Skip when a
+    // digit shortcut asked for the first cover — that focus is applied once
+    // results render so we do not park the ring on a chip mid-load.
+    if (!this.focusFirstItem) {
+      const defaultFocus = wrap.querySelector('[data-action="select-filter"].active') || wrap.querySelector('[data-action="select-filter"]') || wrap.querySelector('[data-action="select-weekday"]');
+      if (defaultFocus) {
+        this.container.querySelectorAll(".focused").forEach((n) => n.classList.remove("focused"));
+        defaultFocus.classList.add("focused");
+        defaultFocus.focus();
+      }
     }
     ScreenUtils.indexFocusables(wrap);
   },
@@ -503,17 +511,25 @@ export const SearchScreen = {
     const body = this.container.querySelector("#searchBody");
     if (!this.results.length) {
       body.innerHTML = `<div class="empty-state">暂无内容</div>`;
+      // No covers — fall back to the filter chip so the screen is still
+      // navigable after a digit shortcut lands on an empty category.
+      if (this.focusFirstItem) {
+        this.focusFirstItem = false;
+        const chip = this.container.querySelector('[data-action="select-filter"].active')
+          || this.container.querySelector('[data-action="select-filter"]');
+        if (chip) ScreenUtils.setInitialFocus(chip);
+      }
       return;
     }
     const cards = this.results.slice(0, 120).map((r, i) => {
-      const poster = api.getImageProxyUrl(r.poster);
+      const poster = posterAttrs(r.poster);
       const title = escapeHtml(r.title || r.name_cn || r.name || "");
       const year = escapeHtml(r.year || "");
       const rate = r.rate ? `<span class="rate-badge">★ ${escapeHtml(r.rate)}</span>` : "";
       const sub = `${rate}${year ? `<span>${year}</span>` : ""}`;
       return `
         <div class="poster-card focusable" data-action="open-douban" data-index="${i}">
-          <img class="poster-img" src="${poster}" alt="" loading="lazy" onerror="this.style.opacity=0.1" />
+          <img class="poster-img" ${poster} alt="" loading="lazy" onerror="this.style.opacity=0.1" />
           <div class="poster-meta">
             <div class="poster-title">${title}</div>
             <div class="poster-sub">${sub}</div>
@@ -525,6 +541,11 @@ export const SearchScreen = {
     const heading = `${cfg.label} · ${escapeHtml(this._currentTagLabel())}`;
     body.innerHTML = `<div class="section-title">${heading}</div><div class="poster-grid">${cards}</div>`;
     ScreenUtils.indexFocusables(body);
+    if (this.focusFirstItem) {
+      this.focusFirstItem = false;
+      const first = body.querySelector(".poster-card");
+      if (first) ScreenUtils.setInitialFocus(first);
+    }
   },
 
   // Build heading suffix from active filter labels.

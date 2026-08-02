@@ -1,16 +1,20 @@
-// localLibrary.js — device-local favorites & play records.
+// localLibrary.js — on-device favorites & play records.
 //
-// DecoTV in public mode gates its /api/favorites and /api/playrecords behind a
-// real account cookie, which a file:// webOS app cannot carry cross-origin
-// (see README). This app therefore keeps favorites and play progress on the TV
-// itself, in localStorage. The method shapes mirror the DecoTV API client so
-// screen code stays identical; keys use the DecoTV `${source}+${id}` convention
-// and records use a 1-based `index` (episode number).
+// Every screen reads its library state from here, synchronously. When the user
+// is signed in, librarySync keeps this store in step with /api/favorites and
+// /api/playrecords in the background; when they are browsing anonymously this
+// is simply where the data lives. Either way the read path is the same, which
+// is why none of the screens know whether syncing is on.
+//
+// Method shapes mirror the DecoTV API client. Favorite keys use the DecoTV
+// `${source}+${id}` convention and records use a 1-based `index` (episode
+// number).
 
 import { LocalStore } from "./localStore.js";
 
 const FAVORITES_KEY = "decotv.local.favorites";
 const RECORDS_KEY = "decotv.local.playRecords";
+const OUTRO_MARKS_KEY = "decotv.local.outroMarks";
 const RECORDS_MIGRATED_KEY = "decotv.local.playRecords.migratedVersion";
 
 // Storage schema version — decoupled from app version. Bump this when the
@@ -74,6 +78,12 @@ export const LocalLibrary = {
     return { ok: true };
   },
 
+  // Whole-map writes used by librarySync when the server takes over as the
+  // source of truth. Screens keep reading through the getters above.
+  replaceFavorites(all) {
+    LocalStore.set(FAVORITES_KEY, all || {});
+  },
+
   // ── Play records ────────────────────────────────────────────────────────
   // Shape: { "title|year": { title, source_name, cover, index(1-based), total_episodes,
   //                         play_time, total_time, year, save_time } }
@@ -99,6 +109,45 @@ export const LocalLibrary = {
     const all = this.getPlayRecords();
     delete all[key];
     LocalStore.set(RECORDS_KEY, all);
+    return { ok: true };
+  },
+
+  replaceRecords(all) {
+    LocalStore.set(RECORDS_KEY, all || {});
+  },
+
+  // ── Outro marks ──────────────────────────────────────────────────────────
+  // Shape: { "title|year": { fromEnd, markedAt } }
+  // These are intentionally separate from play records: librarySync replaces
+  // the record map with the server's copy, while outro marks are local-only.
+  getOutroMarks() {
+    return LocalStore.get(OUTRO_MARKS_KEY, {}) || {};
+  },
+
+  getOutroMark(key) {
+    if (!key) return null;
+    return this.getOutroMarks()[key] || null;
+  },
+
+  saveOutroMark(key, mark) {
+    if (!key) return { ok: false };
+    const fromEnd = Number(mark?.fromEnd);
+    if (!Number.isFinite(fromEnd)) return { ok: false };
+    const markedAt = Number(mark?.markedAt);
+    const all = this.getOutroMarks();
+    all[key] = {
+      fromEnd,
+      markedAt: Number.isFinite(markedAt) ? markedAt : now()
+    };
+    LocalStore.set(OUTRO_MARKS_KEY, all);
+    return { ok: true };
+  },
+
+  deleteOutroMark(key) {
+    if (!key) { LocalStore.remove(OUTRO_MARKS_KEY); return { ok: true }; }
+    const all = this.getOutroMarks();
+    delete all[key];
+    LocalStore.set(OUTRO_MARKS_KEY, all);
     return { ok: true };
   }
 };

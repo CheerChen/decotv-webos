@@ -12,6 +12,8 @@ import {
   getPlaybackEvidenceTier,
   comparePlaybackMetrics,
   getSourceProbeKey,
+  rankSourcesByProbe,
+  pickBestAvailableSource,
 } from "../js/core/network/sourceRanking.js";
 
 describe("getQualityRank", () => {
@@ -137,5 +139,40 @@ describe("comparePlaybackMetrics", () => {
 describe("getSourceProbeKey", () => {
   test("builds source-id key", () => {
     assert.equal(getSourceProbeKey({ source: "jszyapi.com", id: 61361 }), "jszyapi.com-61361");
+  });
+});
+
+describe("source failover ranking", () => {
+  const sources = [
+    { source: "search-first", id: 1 },
+    { source: "best", id: 2 },
+    { source: "second-best", id: 3 },
+    { source: "unprobed", id: 4 },
+  ];
+  const probes = new Map([
+    ["search-first-1", { quality: "720p", speedKBps: 900 }],
+    ["best-2", { quality: "1080p", speedKBps: 100 }],
+    ["second-best-3", { quality: "720p", speedKBps: 800 }],
+  ]);
+
+  test("ranks by probe quality instead of search order", () => {
+    const ranked = rankSourcesByProbe(sources, probes);
+    assert.deepEqual(ranked.map(getSourceProbeKey), [
+      "best-2",
+      "search-first-1",
+      "second-best-3",
+      "unprobed-4",
+    ]);
+  });
+
+  test("failover picks the best remaining source after the current one fails", () => {
+    const next = pickBestAvailableSource(sources, probes, new Set(["best-2"]));
+    assert.equal(getSourceProbeKey(next), "search-first-1");
+  });
+
+  test("does not mutate the source order used by the player", () => {
+    const original = sources.map(getSourceProbeKey);
+    rankSourcesByProbe(sources, probes);
+    assert.deepEqual(sources.map(getSourceProbeKey), original);
   });
 });

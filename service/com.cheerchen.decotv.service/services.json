@@ -1,0 +1,10 @@
+{
+  "id": "com.cheerchen.decotv.service",
+  "description": "Authenticated DecoTV API transport",
+  "services": [
+    {
+      "name": "com.cheerchen.decotv.service",
+      "description": "Authenticated DecoTV API transport"
+    }
+  ]
+}

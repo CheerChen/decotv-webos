@@ -1,9 +1,16 @@
 // decotvClient.js — DecoTV / LunaTV-compatible API client for webOS.
 // Ported from OrionTV services/api.ts (TypeScript → vanilla JS).
-// AsyncStorage → localStorage; cookie handling delegated to fetch credentials:'include'.
-// Verified against DecoTV 1.5.0 (kvrocks storage, public auth mode) on 2026-07-26.
+// AsyncStorage → localStorage. On webOS, authenticated requests go through the
+// bundled Luna JS service so its Node process can persist the auth cookie.
+// Browser/dev preview falls back to fetch().
 
 import { LocalStore } from "../storage/localStore.js";
+import {
+  clearLunaSession,
+  getLunaSession,
+  hasLunaTransport,
+  lunaFetch
+} from "./lunaTransport.js";
 
 // region: --- Types (documentation only, JS) ---
 // DoubanItem       { id, title, poster, rate, year }
@@ -49,20 +56,35 @@ export class DecoTVClient {
 
   async _fetch(url, options = {}) {
     if (!this.baseURL) throw new Error("API_URL_NOT_SET");
+    const timeoutMs = options.timeoutMs ?? 10000;
+    const requestOptions = { ...options };
+    delete requestOptions.timeoutMs;
+    // The session probe must not re-enter the 401 handler: that handler exists
+    // to rebuild a session, and rebuilding one is what asks for this probe.
+    const silent401 = requestOptions.silent401 === true;
+    delete requestOptions.silent401;
+
+    if (hasLunaTransport()) {
+      const response = await lunaFetch(this.baseURL, url, {
+        ...requestOptions,
+        timeoutMs
+      });
+      return this._checkResponse(response, silent401);
+    }
+
     // Default timeout: 10s. Caller can override via options.timeoutMs = 0 (no timeout)
     // or pass their own AbortController via options.signal (timeout is skipped).
-    const timeoutMs = options.timeoutMs ?? 10000;
-    const callerSignal = options.signal;
+    const callerSignal = requestOptions.signal;
     if (timeoutMs > 0 && !callerSignal) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
         const response = await fetch(`${this.baseURL}${url}`, {
           credentials: "include",
-          ...options,
+          ...requestOptions,
           signal: controller.signal,
         });
-        return this._checkResponse(response);
+        return this._checkResponse(response, silent401);
       } catch (e) {
         if (e?.name === "AbortError") throw new Error("TIMEOUT");
         throw e;
@@ -73,15 +95,15 @@ export class DecoTVClient {
     // No timeout or caller has own signal — pass through directly.
     const response = await fetch(`${this.baseURL}${url}`, {
       credentials: "include",
-      ...options,
+      ...requestOptions,
     });
-    return this._checkResponse(response);
+    return this._checkResponse(response, silent401);
   }
 
-  _checkResponse(response) {
+  _checkResponse(response, silent401 = false) {
     if (response.status === 401) {
       // Global 401 hook — authManager will navigate to login/server screen.
-      if (typeof this.onUnauthorized === "function") {
+      if (!silent401 && typeof this.onUnauthorized === "function") {
         try { this.onUnauthorized(); } catch (_) {}
       }
       throw new Error("UNAUTHORIZED");
@@ -106,8 +128,30 @@ export class DecoTVClient {
       await this._fetch("/api/logout", { method: "POST" });
     } catch (e) {
       // best-effort: network errors don't block local cleanup
+    } finally {
+      await clearLunaSession(this.baseURL);
     }
     return { ok: true };
+  }
+
+  // Whether the service is holding a cookie. Says nothing about whether that
+  // cookie still works — see verifySession.
+  async hasPersistedSession() {
+    const state = await getLunaSession(this.baseURL);
+    return state.hasSession;
+  }
+
+  // Whether the server still accepts the session. Favorites is the cheapest
+  // per-user endpoint: it answers 200 with `{}` for a signed-in account and
+  // 401 for everyone else, including an expired cookie and a public-mode
+  // server that issued no cookie in the first place.
+  async verifySession() {
+    try {
+      await this._fetch("/api/favorites", { timeoutMs: 8000, silent401: true });
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   async getServerConfig() {
@@ -207,9 +251,14 @@ export class DecoTVClient {
   //   { quality, loadSpeed, pingTime, speedKBps, startupTimeMs, hasError,
   //     status, playable, message, failureKind, mediaType,
   //     originalUrl, resolvedUrl, playbackUrl, resolved, proxied, testedAt }
+  // timeoutMs is the SERVER's probe budget, not the client's. The server also
+  // resolves the URL, fetches the manifest and pulls a 384 KiB media sample on
+  // top of it, so probes with an 8s budget were measured taking 5-14s end to
+  // end. The client timeout needs that headroom — without it _fetch's 10s
+  // default cut probes off and reported healthy sources as timeouts.
   async probePlayback(url, source, timeoutMs = 8000, signal) {
     const u = `/api/playback/probe?url=${encodeURIComponent(url)}&source=${encodeURIComponent(source)}&timeoutMs=${timeoutMs}`;
-    const response = await this._fetch(u, { signal });
+    const response = await this._fetch(u, { signal, timeoutMs: timeoutMs + 7000 });
     return response.json();
   }
 
