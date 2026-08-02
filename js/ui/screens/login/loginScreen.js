@@ -1,6 +1,7 @@
 // loginScreen.js — username/password login (multi-user storage mode).
 
 import { ScreenUtils } from "../../navigation/screen.js";
+import { Router } from "../../navigation/router.js";
 import { AuthManager } from "../../../core/auth/authManager.js";
 import { t } from "../../../core/i18n.js";
 
@@ -93,6 +94,9 @@ export const LoginScreen = {
   },
 
   async onKeyDown(event) {
+    // D-pad moves across username/password/submit/skip; without this the
+    // remote could not move focus at all (only the pointer worked).
+    if (ScreenUtils.handleDpadNavigation(event, this.container)) return;
     if (event.keyCode === 13) {
       const focused = this.container.querySelector(".focused");
       if (focused?.dataset?.action === "skip") { await AuthManager.skipLogin(); return; }
@@ -103,12 +107,12 @@ export const LoginScreen = {
   },
 
   // Back during a server switch rolls the working session back and lets the
-  // router return to settings. Otherwise the login gate is the root — after
-  // an explicit logout or a failed boot session there are no screens behind
-  // it worth resurrecting, so Back exits the app.
+  // router return to settings. Otherwise Back steps up the gate hierarchy:
+  // credentials → server screen (prefilled with the current address). The
+  // server screen is the root that exits the app.
   consumeBackRequest() {
     if (AuthManager.abortServerSwitch()) return false;
-    if (window.webOSSystem) webOSSystem.close();
+    Router.navigate("server", {}, { replaceHistory: true });
     return true;
   },
 

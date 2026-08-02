@@ -94,8 +94,10 @@ export const ServerScreen = {
     }
   },
 
-  // FocusEngine calls this for Enter on focused .focusable.
   async onKeyDown(event) {
+    // D-pad moves between the URL input and the Connect button; without this
+    // the remote could not move focus at all (only the pointer worked).
+    if (ScreenUtils.handleDpadNavigation(event, this.container)) return;
     if (event.keyCode === 13) {
       const focused = this.container.querySelector(".focused");
       if (focused?.dataset?.action === "connect") {

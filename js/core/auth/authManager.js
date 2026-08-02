@@ -274,10 +274,12 @@ export const AuthManager = {
 
   // Explicit sign-out: server-side logout + the service's cookie jar for this
   // origin is cleared (api.logout → clearLunaSession), so nothing is left to
-  // silently resume from. Always lands on the login gate — auto-dropping to
-  // anonymous browsing made an explicit sign-out look like a half-broken home
-  // screen; the gate's "browse only" button is the explicit way back into
-  // anonymous mode.
+  // silently resume from. Lands on the SERVER screen — the root of the gate
+  // hierarchy (server → credentials → home) — with the address prefilled, so
+  // both "reconnect here" and "somewhere else" start from the same place.
+  // Auto-dropping to anonymous browsing made an explicit sign-out look like a
+  // half-broken home screen; the login step's "browse only" button remains
+  // the explicit way into anonymous mode.
   async logout() {
     try {
       await api.logout();
@@ -285,7 +287,7 @@ export const AuthManager = {
     this.setStoredCredentials(null);
     this.loggedInUser = null;
     this._accountSession = false;
-    this._setState(AuthState.NEED_LOGIN, { serverConfig: this.serverConfig });
+    this._setState(AuthState.NEED_SERVER, { serverConfig: this.serverConfig });
   },
 
   // Called by the global 401 interceptor. Silently re-establishes the session

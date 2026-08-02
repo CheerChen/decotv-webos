@@ -245,7 +245,7 @@ describe("switching servers is a transaction", () => {
   });
 });
 
-describe("an explicit sign-out lands on the login gate", () => {
+describe("an explicit sign-out lands on the server screen (the gate root)", () => {
   test("even a public server does not silently re-enter anonymous mode", async () => {
     stubApi({ config: PUBLIC_MODE, sessionValid: true });
     await AuthManager.loginWithCredentials("pi", "secret");
@@ -257,7 +257,7 @@ describe("an explicit sign-out lands on the login gate", () => {
     off();
     assert.equal(calls.logout, 1, "the server-side session was ended");
     assert.deepEqual(calls.login, [], "no automatic anonymous re-login");
-    assert.equal(states.at(-1), AuthState.NEED_LOGIN);
+    assert.equal(states.at(-1), AuthState.NEED_SERVER, "back to the root of the gate");
     assert.equal(AuthManager.hasAccountSession(), false);
     assert.equal(AuthManager.getStoredCredentials(), null, "credentials forgotten");
   });
