@@ -3,8 +3,7 @@
 import { ScreenUtils } from "../../navigation/screen.js";
 import { Router } from "../../navigation/router.js";
 import { AuthManager } from "../../../core/auth/authManager.js";
-import { api, STORAGE_BASEURL } from "../../../core/network/decotvClient.js";
-import { LocalStore } from "../../../core/storage/localStore.js";
+import { api } from "../../../core/network/decotvClient.js";
 import { LocalLibrary } from "../../../core/storage/localLibrary.js";
 import { LibrarySync } from "../../../core/storage/librarySync.js";
 import { showToast } from "../../toast.js";
@@ -74,6 +73,11 @@ export const SettingsScreen = {
                 <div class="settings-label">${t("settings.clearRecords")}</div>
                 <div class="settings-value">›</div>
               </div>
+              ${AuthManager.hasAccountSession() ? `
+              <div class="settings-item focusable" data-action="logout">
+                <div class="settings-label">${t("settings.logout")}</div>
+                <div class="settings-value">›</div>
+              </div>` : ""}
             </div>
           </div>
           <div class="settings-col settings-col-info">
@@ -119,10 +123,15 @@ export const SettingsScreen = {
         return;
       }
       if (action === "change-server") {
-        LocalStore.remove(STORAGE_BASEURL);
-        api.setBaseUrl("");
-        AuthManager.reset();
-        Router.navigate("server", {}, { replaceHistory: true });
+        // Non-destructive: the working session is snapshotted and only
+        // replaced once a login on the new server completes. Backing out of
+        // the server (or login) screen rolls back to it.
+        AuthManager.beginServerSwitch();
+        Router.navigate("server");
+        return;
+      }
+      if (action === "logout") {
+        await AuthManager.logout();
         return;
       }
       if (action === "clear-records") {

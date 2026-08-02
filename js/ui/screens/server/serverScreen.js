@@ -2,6 +2,7 @@
 
 import { ScreenUtils } from "../../navigation/screen.js";
 import { AuthManager, AuthState } from "../../../core/auth/authManager.js";
+import { api } from "../../../core/network/decotvClient.js";
 import { showToast } from "../../toast.js";
 import { t } from "../../../core/i18n.js";
 
@@ -14,6 +15,9 @@ export const ServerScreen = {
     this.container = document.getElementById("server");
     this.error = params.error || "";
     this.connecting = false;
+    // When switching servers, start from the current address rather than an
+    // empty field — the user is usually editing, not retyping.
+    this._lastValue = api.getStoredBaseUrl() || this._lastValue || "";
     this._render();
     ScreenUtils.show(this.container);
     const input = this.container.querySelector("#serverUrlInput");
@@ -100,6 +104,16 @@ export const ServerScreen = {
         await this._doConnect();
       }
     }
+  },
+
+  // Back during a server switch rolls the working session back and lets the
+  // router return to settings. Outside a switch (first run / connect-fail)
+  // this screen is the root: there is nothing meaningful behind it, so Back
+  // exits the app instead of falling through to a serverless home screen.
+  consumeBackRequest() {
+    if (AuthManager.abortServerSwitch()) return false;
+    if (window.webOSSystem) webOSSystem.close();
+    return true;
   },
 
   cleanup() {

@@ -35,6 +35,7 @@ export const AuthManager = {
   serverConfig: null,
   loggedInUser: null,   // real logged-in username, or null when browsing anonymously
   _accountSession: false, // a server-verified account session exists (see hasAccountSession)
+  _pendingSwitch: null, // snapshot of the working config while a server switch awaits its first login
   _ensuring: null,      // in-flight ensureSession promise (dedupes concurrent 401s)
   subscribers: new Set(),
 
@@ -44,12 +45,44 @@ export const AuthManager = {
   },
 
   _setState(next, extra) {
+    // Reaching AUTHENTICATED commits a pending server switch: only a session
+    // that actually established (credentials or anonymous) replaces the
+    // previous working configuration.
+    if (next === AuthState.AUTHENTICATED) this._pendingSwitch = null;
     this.state = next;
     this.subscribers.forEach((fn) => fn(next, extra));
   },
 
-  reset() {
-    this.serverConfig = null;
+  // ── Server switching is a transaction ─────────────────────────────────────
+  // Entering the server screen from settings must not touch the working
+  // session: the switch only takes effect once a login on the new server
+  // completes (AUTHENTICATED commits, see _setState). Backing out anywhere
+  // before that restores the snapshot taken here.
+  beginServerSwitch() {
+    const baseUrl = api.getStoredBaseUrl();
+    if (!baseUrl) return; // first run: nothing to preserve
+    this._pendingSwitch = {
+      baseUrl,
+      storedServerConfig: api.getStoredServerConfig(),
+      serverConfig: this.serverConfig,
+      loggedInUser: this.loggedInUser,
+      accountSession: this._accountSession
+    };
+  },
+
+  // Returns true when an uncommitted switch was rolled back. The service's
+  // cookie jar for the previous origin was never touched, so the restored
+  // session is still honoured without a new login.
+  abortServerSwitch() {
+    const snapshot = this._pendingSwitch;
+    if (!snapshot) return false;
+    this._pendingSwitch = null;
+    api.setBaseUrl(snapshot.baseUrl);
+    api.setStoredServerConfig(snapshot.storedServerConfig);
+    this.serverConfig = snapshot.serverConfig;
+    this.loggedInUser = snapshot.loggedInUser;
+    this._accountSession = snapshot.accountSession;
+    return true;
   },
 
   // ── Credential persistence ────────────────────────────────────────────────
@@ -185,6 +218,7 @@ export const AuthManager = {
   // User submitted a server URL.
   async connect(url) {
     this._setState(AuthState.LOADING);
+    const previous = api.getStoredBaseUrl();
     const normalized = url.replace(/\/+$/, "");
     api.setBaseUrl(normalized);
     try {
@@ -198,8 +232,10 @@ export const AuthManager = {
       // Password-mode servers are supported by the bundled JS service.
       this._setState(AuthState.NEED_LOGIN, { serverConfig: cfg });
     } catch (e) {
-      api.setBaseUrl("");
-      LocalStore.remove(STORAGE_BASEURL);
+      // A failed probe of a new address must not destroy the configuration
+      // behind it — keep the previous URL so Back (or a retry) still has a
+      // working server. Only a first run has nothing to keep.
+      api.setBaseUrl(previous || "");
       this._setState(AuthState.NEED_SERVER, { error: this._humanizeError(e) });
     }
   },
@@ -236,19 +272,19 @@ export const AuthManager = {
     this._setState(AuthState.AUTHENTICATED, { serverConfig: this.serverConfig });
   },
 
+  // Explicit sign-out: server-side logout + the service's cookie jar for this
+  // origin is cleared (api.logout → clearLunaSession), so nothing is left to
+  // silently resume from. Always lands on the login gate — auto-dropping to
+  // anonymous browsing made an explicit sign-out look like a half-broken home
+  // screen; the gate's "browse only" button is the explicit way back into
+  // anonymous mode.
   async logout() {
     try {
       await api.logout();
     } catch (e) { /* best-effort */ }
-    // Forget the account but keep the server — drop back to anonymous browsing.
     this.setStoredCredentials(null);
     this.loggedInUser = null;
     this._accountSession = false;
-    if (this.canBrowseAnonymously()) {
-      try { await api.login(undefined, undefined); } catch (e) { /* ignore */ }
-      this._setState(AuthState.AUTHENTICATED, { serverConfig: this.serverConfig });
-      return;
-    }
     this._setState(AuthState.NEED_LOGIN, { serverConfig: this.serverConfig });
   },
 

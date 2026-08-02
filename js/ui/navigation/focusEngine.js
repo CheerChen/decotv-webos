@@ -129,8 +129,10 @@ export const FocusEngine = {
       event.preventDefault?.();
       event.stopPropagation?.();
       event.stopImmediatePropagation?.();
-      const currentScreen = this.router?.getCurrentScreen?.();
-      if (currentScreen?.consumeBackRequest?.()) return;
+      // Router.back() consults the screen's consumeBackRequest itself. Asking
+      // here first meant every Back asked TWICE, which breaks screens whose
+      // answer is stateful (a server-switch rollback consumed by the first
+      // call made the second call look like a root-screen Back and exit).
       this.router?.back?.();
       return;
     }

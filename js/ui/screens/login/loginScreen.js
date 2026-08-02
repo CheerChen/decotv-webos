@@ -102,6 +102,16 @@ export const LoginScreen = {
     }
   },
 
+  // Back during a server switch rolls the working session back and lets the
+  // router return to settings. Otherwise the login gate is the root — after
+  // an explicit logout or a failed boot session there are no screens behind
+  // it worth resurrecting, so Back exits the app.
+  consumeBackRequest() {
+    if (AuthManager.abortServerSwitch()) return false;
+    if (window.webOSSystem) webOSSystem.close();
+    return true;
+  },
+
   cleanup() {
     ScreenUtils.hide(this.container);
   }

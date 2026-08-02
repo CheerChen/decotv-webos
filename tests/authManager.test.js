@@ -24,9 +24,12 @@ let calls;
 
 // Stub only the network surface; setBaseUrl/getStoredBaseUrl run for real so
 // the per-server keying is exercised against the same storage the app uses.
-function stubApi({ config = PASSWORD_MODE, hasCookie = false, sessionValid = false, loginThrows = false } = {}) {
-  calls = { login: [], verify: 0 };
-  api.getServerConfig = async () => config;
+function stubApi({ config = PASSWORD_MODE, hasCookie = false, sessionValid = false, loginThrows = false, configThrows = false } = {}) {
+  calls = { login: [], verify: 0, logout: 0 };
+  api.getServerConfig = async () => {
+    if (configThrows) throw new Error("Failed to fetch");
+    return config;
+  };
   api.setStoredServerConfig = () => {};
   api.hasPersistedSession = async () => hasCookie;
   api.verifySession = async () => { calls.verify++; return sessionValid; };
@@ -35,6 +38,7 @@ function stubApi({ config = PASSWORD_MODE, hasCookie = false, sessionValid = fal
     if (loginThrows) throw new Error("UNAUTHORIZED");
     return { ok: true };
   };
+  api.logout = async () => { calls.logout++; };
 }
 
 beforeEach(() => {
@@ -43,6 +47,7 @@ beforeEach(() => {
   AuthManager.serverConfig = null;
   AuthManager.loggedInUser = null;
   AuthManager._accountSession = false;
+  AuthManager._pendingSwitch = null;
   AuthManager._ensuring = null;
   api.setBaseUrl(SERVER_A);
 });
@@ -192,6 +197,69 @@ describe("what each server mode leads to", () => {
     off();
     assert.equal(states.at(-1), AuthState.AUTHENTICATED);
     assert.equal(AuthManager.isLoggedIn(), true);
+  });
+});
+
+describe("switching servers is a transaction", () => {
+  test("a failed probe of a new address keeps the previous server", async () => {
+    stubApi({ configThrows: true });
+    api.setBaseUrl(SERVER_A); // persisted working server
+    const states = [];
+    const off = AuthManager.subscribe((s) => states.push(s));
+    await AuthManager.connect(SERVER_B);
+    off();
+    assert.equal(states.at(-1), AuthState.NEED_SERVER, "the error is shown");
+    assert.equal(api.getStoredBaseUrl(), SERVER_A, "the working address survives");
+  });
+
+  test("backing out of an uncommitted switch restores the session", async () => {
+    stubApi({ config: PASSWORD_MODE });
+    AuthManager.serverConfig = PASSWORD_MODE;
+    AuthManager.loggedInUser = "pi";
+    AuthManager._accountSession = true;
+    AuthManager.beginServerSwitch();
+
+    // The switch got as far as a reachable new server asking for a login.
+    await AuthManager.connect(SERVER_B);
+    assert.equal(api.getStoredBaseUrl(), SERVER_B);
+    assert.equal(AuthManager.hasAccountSession(), false);
+
+    assert.equal(AuthManager.abortServerSwitch(), true);
+    assert.equal(api.getStoredBaseUrl(), SERVER_A, "server restored");
+    assert.equal(AuthManager.loggedInUser, "pi", "user restored");
+    assert.equal(AuthManager.hasAccountSession(), true, "session restored");
+  });
+
+  test("without a pending switch there is nothing to abort", () => {
+    stubApi();
+    assert.equal(AuthManager.abortServerSwitch(), false);
+  });
+
+  test("a completed login on the new server commits the switch", async () => {
+    stubApi({ config: PASSWORD_MODE, sessionValid: true });
+    AuthManager.beginServerSwitch();
+    api.setBaseUrl(SERVER_B);
+    await AuthManager.loginWithCredentials("pi", "secret");
+    assert.equal(AuthManager.abortServerSwitch(), false, "nothing left to roll back");
+    assert.equal(api.getStoredBaseUrl(), SERVER_B, "the new server is now the one");
+  });
+});
+
+describe("an explicit sign-out lands on the login gate", () => {
+  test("even a public server does not silently re-enter anonymous mode", async () => {
+    stubApi({ config: PUBLIC_MODE, sessionValid: true });
+    await AuthManager.loginWithCredentials("pi", "secret");
+    AuthManager.serverConfig = PUBLIC_MODE;
+    calls.login = [];
+    const states = [];
+    const off = AuthManager.subscribe((s) => states.push(s));
+    await AuthManager.logout();
+    off();
+    assert.equal(calls.logout, 1, "the server-side session was ended");
+    assert.deepEqual(calls.login, [], "no automatic anonymous re-login");
+    assert.equal(states.at(-1), AuthState.NEED_LOGIN);
+    assert.equal(AuthManager.hasAccountSession(), false);
+    assert.equal(AuthManager.getStoredCredentials(), null, "credentials forgotten");
   });
 });
 

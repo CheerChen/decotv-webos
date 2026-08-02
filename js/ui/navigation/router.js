@@ -26,9 +26,11 @@ export const Router = {
       window.addEventListener("popstate", () => {
         // Re-push sentinel so future Back keys still trigger popstate.
         window.history.pushState({ sentinel: true }, "");
-        // Delegate to our back() — the single source of truth.
-        const currentScreen = this.routes[this.current];
-        if (currentScreen?.consumeBackRequest?.()) return;
+        // Delegate to back() — it consults the screen's consumeBackRequest
+        // itself. Asking here as well made every popstate Back ask TWICE,
+        // which breaks screens whose answer is stateful (a server-switch
+        // rollback consumed by the first call made the second call look like
+        // a root-screen Back and exit the app).
         this.back();
       });
     }
