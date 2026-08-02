@@ -426,6 +426,7 @@ export const PlayerScreen = {
     this._updateOsdStats();
     if (!this._resumeApplied) this._applyResume(); // retry until metadata is ready
     // Persist progress periodically while actually playing.
+    const cur = v.currentTime || 0;
     if (!v.paused && cur > 0) {
       const now = Date.now();
       if (now - this._lastSaveAt >= RECORD_SAVE_INTERVAL_MS) this._saveRecord();
