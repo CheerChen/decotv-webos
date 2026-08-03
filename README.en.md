@@ -52,7 +52,7 @@ A **purpose-built webOS TV client** for [DecoTV](https://github.com/Decohererk/D
 
 The server ships empty: **no built-in media sources**. Configure sources on the DecoTV server.
 
-Current version: `0.5.0`. See [Releases](https://github.com/CheerChen/decotv-webos/releases) and [CHANGELOG.md](CHANGELOG.md).
+See [Releases](https://github.com/CheerChen/decotv-webos/releases) for packages and [CHANGELOG.md](CHANGELOG.md) for the update history.
 
 ---
 
@@ -61,37 +61,15 @@ Current version: `0.5.0`. See [Releases](https://github.com/CheerChen/decotv-web
 | Feature | Notes |
 | --- | --- |
 | Home wall | Continue-watching on top; hot movie, series, anime and variety rows |
-| Poster pipeline | Posters are fetched through the webOS JS Service with caching, fallback and trusted-host checks |
-| Category browse | Hot + curated tabs for movies, series, anime, variety, documentary; chip filters |
+| Douban categories | Uses Douban’s hot and curated tabs for movies, series, anime, variety and documentary; filters by region, genre and year |
 | Multi-source probe ranking | All sources are measured concurrently, ranked by quality, throughput and startup latency; probing continues in the background and playback can start at any time with the best source so far |
 | Detail page plays directly | Selecting an episode or a source starts playback; the episode grid sits above the (often long) source list, with the last-watched episode highlighted |
 | Failover / manual switch | On failure, the best measured remaining source takes over from where playback stopped; in-player source side panel remains available |
 | Progress memory | Keyed by title + year (survives source switch); the play button announces the episode it will resume |
-| Outro auto-skip | Mark the outro once in the player and every episode of that show advances automatically at the marked point (never on the last episode); marks are stored as a distance from the end and stay on the TV |
-| Library | Favorites & play history sync with the server once signed in, so they follow you across devices; public mode or no session keeps them on the TV |
-| Settings layout | Left: actions (change server, clear history, language); right: read-only client + server info |
+| Library | Favorites & play history sync with the server once signed in; public mode or no session keeps them on the TV |
 | Chinese / English UI | Follows the TV language (anything non-Chinese gets English), switchable in Settings; server-supplied content such as titles and genres stays Chinese |
 | Remote UX | D-pad / OK / Back; digit keys `0–9` switch navigation; geometry focus engine |
-| Player controls | Previous / next episode buttons plus the channel +/− keys; ↑ opens the episode list; left/right seek by 10 seconds; the playback bar and side panels share a five-second idle timer and stay visible while paused |
-| Player OSD | Live resolution, buffer and outro marker on the progress bar; episode / source side panels; one-shot mid-roll ad skipping |
 | Hardware decode | Platform HLS, no HLS.js |
-
-### Differences from the PC web UI
-
-| Topic | PC / browser DecoTV | This client |
-| --- | --- | --- |
-| Auth | Account modes | Same; `public` servers can also be browsed anonymously |
-| Favorites / progress | Sync via server | Same, once signed in; TV-local otherwise |
-| Source config | Server admin | Same — not configured in-app |
-| Decode | HLS.js / ArtPlayer, etc. | Platform hardware decode |
-
-**Account mode support:** password-based account mode arrives in `0.5.0`; `0.4.2` only worked against `public` servers. Signing in brings server-side sync of favorites and play history across devices, and the JS service introduced to keep the session also took over poster loading (caching and fallback — `public` mode benefits too).
-
-**How the session survives:** the app loads from `file://`, so API calls are cross-site. The TV webview will not store a `SameSite=Lax` session cookie, and page code can neither read nor set the `Cookie` header. The IPK bundles a webOS JS service that issues requests from its own Node process, outside the webview, where it can persist the cookie and send it back — which is what keeps an account session alive.
-
-**What `public` mode costs:** `/api/login` issues no cookie in that mode, so no account session can be established and `/api/favorites` and `/api/playrecords` answer 401. Browsing, search and playback are unaffected; favorites and play history fall back to TV-local storage with no cross-device sync. For syncing, drop `NEXT_PUBLIC_AUTH_MODE=public` from the server and set `USERNAME` and `PASSWORD`.
-
-**Credential storage:** an account-mode server prompts for a sign-in once, and the username and password are kept in plain text in the TV's `localStorage` so the session can be re-established silently when it expires. That is a deliberate trade for a single-owner TV appliance; on a shared set, do not save an account.
 
 ---
 
@@ -107,9 +85,9 @@ Server setup: [DecoTV](https://github.com/Decohererk/DecoTV)
 
 ## Install
 
-### A — Homebrew Channel (planned)
+### A — Homebrew Channel
 
-After listing in [webosbrew/apps-repo](https://github.com/webosbrew/apps-repo), install from Homebrew Channel on the TV.
+The app is listed in [webosbrew/apps-repo](https://github.com/webosbrew/apps-repo) and can be searched for and installed from Homebrew Channel on the TV.
 
 ### B — Developer Mode / sideload
 
@@ -143,7 +121,7 @@ Or package locally:
 
 1. Install and open **DecoTV**
 2. Enter the server URL, e.g. `http://192.168.1.10:3000`
-3. An account-mode server asks for a sign-in once and re-establishes the session on its own afterwards; `public` servers can be skipped past
+3. An account-mode server asks for a sign-in, then opens the home screen; `public` mode can be used without signing in
 4. Browse the home wall with the D-pad; OK opens detail
 5. Detail probes sources and starts the best one; switch sources on failure or via the panel
 6. The player supports previous / next episode, outro markers and automatic episode advance
@@ -160,7 +138,7 @@ Or package locally:
 | UI | Focus engine + screen router |
 | Playback | Native `<video>` + UMS hardware decode |
 | API | DecoTV / LunaTV-compatible HTTP |
-| Session | Bundled webOS JS service (Node process, outside the webview) |
+| Session | webOS JS service (Node process, outside the webview) |
 | Local data | `localStorage` (server URL, credentials, favorites, play history and outro marks) |
 | Package | `ares-package` → IPK |
 
@@ -184,10 +162,7 @@ uv run tvkit/scripts/cdp_reload.py --target decotv
 
 App ID: `com.cheerchen.decotv`.
 
-Debug tooling lives in [webos-tv-kit](https://github.com/CheerChen/webos-tv-kit) (`tvkit/scripts/`):
-`cdp_eval.py`, `cdp_reload.py`, `cdp_screenshot.py`, `cdp_net.py`, `cdp_keys.py`, `tv_luna.py`,
-all behind uniform `--target` / `--port` flags; the post-deploy smoke test `scripts/tv_smoke.py`
-stays in this repo.
+Debug tooling lives in [webos-tv-kit](https://github.com/CheerChen/webos-tv-kit) (`tvkit/scripts/`).
 
 ---
 
@@ -195,8 +170,6 @@ stays in this repo.
 
 - [DecoTV](https://github.com/Decohererk/DecoTV) — server / web UI
 - [webosbrew](https://github.com/webosbrew) — community tools and app catalog
-- [youtube-webos](https://github.com/webosbrew/youtube-webos)
-- [jellyfin-webos](https://github.com/jellyfin/jellyfin-webos)
 
 ---
 
