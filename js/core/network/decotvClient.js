@@ -59,6 +59,12 @@ export class DecoTVClient {
     const timeoutMs = options.timeoutMs ?? 10000;
     const requestOptions = { ...options };
     delete requestOptions.timeoutMs;
+    // Identify as a native TV client so the server skips its m3u8 ad-filter
+    // proxy (which strips EXT-X-DISCONTINUITY and breaks webOS starfish — see
+    // DecoTV issue #227). The client has its own ad-skip scanner.
+    if (url.startsWith("/api/")) {
+      url = url + (url.includes("?") ? "&" : "?") + "client=orion";
+    }
     // The session probe must not re-enter the 401 handler: that handler exists
     // to rebuild a session, and rebuilding one is what asks for this probe.
     const silent401 = requestOptions.silent401 === true;

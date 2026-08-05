@@ -240,7 +240,11 @@ export class PlaybackController {
     if (next) {
       const key = getSourceProbeKey(next);
       this.toast(`${errorLabel} · ${sourceName} → 换源`);
-      this.switchToSourceKey(key, { resumeAt: this.video?.currentTime || 0 });
+      // After a failed load() the media element's currentTime is already 0,
+      // so a chain of failovers loses the original position. Fall back to the
+      // resumeTime set by the previous switchToSourceKey in the chain.
+      const resumeAt = this.video?.currentTime || this.resumeTime || 0;
+      this.switchToSourceKey(key, { resumeAt });
     } else {
       this.toast(`全部源不可用 · ${errorLabel}`);
       this.stopAndExit();
