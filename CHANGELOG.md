@@ -1,5 +1,12 @@
 # 更新日志
 
+## 0.5.2 — 2026-08-06
+
+### 修复
+
+- 修复换源后概率性从头（0 秒）重播的问题：连续 failover 时 `handlePlaybackError` 读取的 `video.currentTime` 已被 `video.load()` 重置为 0，导致丢失原始进度；现回退到上一次换源设置的 `resumeTime`，续播位置在整条换源链路中保持。
+- 绕过服务端 m3u8 广告过滤代理：所有 `/api/` 请求追加 `client=orion`，使服务端按原生 TV 客户端处理，保留 webOS starfish 在广告拼接点所需的 `EXT-X-DISCONTINUITY` 标记（对应 DecoTV issue #227）；广告跳过仍由客户端内置扫描器完成。
+
 ## 0.5.1 — 2026-08-03
 
 ### 新增
