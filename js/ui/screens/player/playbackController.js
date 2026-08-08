@@ -163,6 +163,7 @@ export class PlaybackController {
           ranges: result.ranges?.length || 0,
           groups: result.groups,
           probed: result.probed,
+          sigAdGroups: result.sigAdGroups || 0,
           elapsedMs: result.elapsedMs,
           baseline: result.baseline,
           wallMs: Date.now() - started,
