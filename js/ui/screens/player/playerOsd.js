@@ -10,6 +10,7 @@ const ICONS = {
   pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>',
   prevEp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h2v14H5zM18 6l-9 6 9 6z"/></svg>',
   nextEp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l9 6-9 6zM17 5h2v14h-2z"/></svg>',
+  restart: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>',
 };
 
 export class PlayerOsd {
@@ -55,6 +56,7 @@ export class PlayerOsd {
       { action: "prevEp", label: ICONS.prevEp, disabled: episodes.length <= 1 || index <= 0 },
       { action: "playPause", label: this.getPaused() ? ICONS.play : ICONS.pause },
       { action: "nextEp", label: ICONS.nextEp, disabled: episodes.length <= 1 || index >= episodes.length - 1 },
+      { action: "restart", label: ICONS.restart },
       { action: "episodePanel", label: "列表", text: true, active: this.getEpisodePanelVisible(), disabled: episodes.length <= 1 },
       { action: "sourcePanel", label: "换源", text: true, active: this.getSourcePanelVisible(), disabled: allSources.length <= 1 },
       { action: "markOutro", label: "标记片尾", text: true, disabled: episodes.length <= 1 },

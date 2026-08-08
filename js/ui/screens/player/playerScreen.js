@@ -488,6 +488,21 @@ export const PlayerScreen = {
     this._playIndex(this.index + 1);
   },
 
+  // Seek back to the very start of the current episode. Keeps the current
+  // paused/playing state; also clears any not-yet-applied resume so a pending
+  // applyResume cannot yank the clock forward again.
+  _restartEpisode() {
+    const v = this.video;
+    if (!v) return;
+    try { v.currentTime = 0; } catch (_) { /* ignore seek errors on closed pipelines */ }
+    if (this.playback) {
+      this.playback.resumeTime = 0;
+      this.playback.resumeApplied = true;
+    }
+    this.setControlsVisible(true);
+    this._resetControlsAutoHide();
+  },
+
   _toggleSourcePanel() {
     if (this.allSources.length <= 1) return;
     this.sourcePanelVisible = !this.sourcePanelVisible;
@@ -712,6 +727,7 @@ export const PlayerScreen = {
       case "playPause": this.osd.togglePlayPause(); break;
       case "prevEp": this._playPreviousEpisode(); break;
       case "nextEp": this._playNextEpisode(); break;
+      case "restart": this._restartEpisode(); break;
       case "markOutro": this._toggleOutroMark(); break;
       case "sourcePanel": this._toggleSourcePanel(); break;
       case "episodePanel": this._toggleEpisodePanel(); break;
