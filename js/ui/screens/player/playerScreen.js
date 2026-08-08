@@ -202,6 +202,13 @@ export const PlayerScreen = {
       this.container.querySelector("#playerLoading")?.classList.remove("hidden");
       // A new load has its own startup buffering; nothing to watch yet.
       this._disarmStall();
+      // The outro one-shot guard belongs to the episode that is loading, not
+      // to the whole player session: every fresh load (auto-advance, manual
+      // switch, source failover) re-arms auto-advance for its episode. It
+      // must NOT reset on index change — the guard has to stay armed while
+      // the previous timeline is still visible during a switch, or a tick in
+      // that window would double-advance and skip episodes.
+      this._outroTriggered = false;
     });
     // Buffer underrun. Legitimate on a slow network, and also the first visible
     // symptom of the frozen-demuxer failure, so show the spinner either way —
