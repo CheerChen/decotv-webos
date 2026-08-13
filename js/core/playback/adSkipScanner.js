@@ -208,6 +208,36 @@ export async function scanAdRanges(playUrl, opts = {}) {
     throw new Error("Not an m3u8 playlist");
   }
 
+  // Dynamic ad-stitching check: a playlist that mixes multiple date-prefixed
+  // storage paths *may* be re-randomizing ad insertion points on every request.
+  // But a source can also stitch ads at fixed positions — that is still
+  // scannable. To tell the two apart, fetch the variant a second time and
+  // compare: if the segment ordering differs, ad positions are randomized and
+  // the pre-scan ranges won't match what the player actually downloads.
+  if (isDynamicStitchedPlaylist(text, finalUrl)) {
+    let unstable = false;
+    try {
+      const second = await fetchPlaylistText(finalUrl, signal);
+      unstable = second.text !== text;
+    } catch (_) {
+      // Network hiccup on the confirmation fetch — be conservative and skip.
+      unstable = true;
+    }
+    if (unstable) {
+      return {
+        ranges: [],
+        baseline: null,
+        groups: 0,
+        probed: 0,
+        sigAdGroups: 0,
+        elapsedMs: Date.now() - started,
+        dynamicStitched: true
+      };
+    }
+    // Same content on re-fetch — ads are stitched at fixed positions, so the
+    // pre-scan ranges are valid. Fall through to normal scanning.
+  }
+
   const groups = parseMediaGroups(text, finalUrl);
   if (!groups.length) {
     return {
@@ -300,6 +330,25 @@ export async function scanAdRanges(playUrl, opts = {}) {
     sigAdGroups: sigUsable ? adGroups.filter((g) => g.sig != null && g.sig !== baselineSig).length : 0,
     elapsedMs: Date.now() - started
   };
+}
+
+// Detect dynamic ad-stitching: a single media playlist whose segment URLs
+// span multiple date-prefixed storage paths (e.g. /20230914/.../879kb/ for
+// content and /20260811/.../10138kb/ for ads). Such sources re-randomize ad
+// insertion points on every request, so a pre-scan's ranges never match the
+// playlist the player's native HLS pipeline actually downloads.
+export function isDynamicStitchedPlaylist(text, baseUrl) {
+  const dates = new Set();
+  for (const line of String(text || "").split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    try {
+      const u = new URL(t, baseUrl);
+      const m = u.pathname.match(/^\/(\d{8})\//);
+      if (m) dates.add(m[1]);
+    } catch (_) {}
+  }
+  return dates.size > 1;
 }
 
 export function isHlsPlayUrl(url) {

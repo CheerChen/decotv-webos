@@ -26,6 +26,7 @@ export function initialAdSkipState() {
     ranges: [], // { start, end }
     jumped: {}, // index -> true
     scanElapsedMs: 0,
+    dynamicStitched: false, // source re-randomizes ad positions per request
     // Live fallback (only when ranges empty after scan settles)
     baselineW: 0,
     baselineH: 0,
@@ -62,6 +63,7 @@ export function applyScanResult(state, result) {
   next.scanElapsedMs = result?.elapsedMs || 0;
   next.ranges = Array.isArray(result?.ranges) ? result.ranges.slice() : [];
   next.jumped = {};
+  next.dynamicStitched = Boolean(result?.dynamicStitched);
   if (result?.baseline?.w && result?.baseline?.h) {
     next.baselineW = result.baseline.w;
     next.baselineH = result.baseline.h;

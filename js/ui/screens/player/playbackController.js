@@ -159,6 +159,9 @@ export class PlaybackController {
       .then((result) => {
         if (token !== this.playToken) return;
         this._setAdSkip(applyScanResult(this.adSkip || initialAdSkipState(), result));
+        if (result.dynamicStitched) {
+          this.toast("该源为动态拼接，广告过滤已失效", 5000);
+        }
         console.info("[DecoTV] ad pre-scan", JSON.stringify({
           ranges: result.ranges?.length || 0,
           groups: result.groups,
@@ -166,6 +169,7 @@ export class PlaybackController {
           sigAdGroups: result.sigAdGroups || 0,
           elapsedMs: result.elapsedMs,
           baseline: result.baseline,
+          dynamicStitched: result.dynamicStitched || false,
           wallMs: Date.now() - started,
         }));
       })
