@@ -173,6 +173,26 @@
   border-radius: 999px;
 }
 
+/* Related-season badges: heuristic links to earlier seasons + bare base title.
+   Sits between tags and synopsis. Reuses .btn.chip.ghost for each badge. */
+.detail-related {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.detail-related-label {
+  color: var(--text-dim);
+  font-size: 16px;
+  flex-shrink: 0;
+}
+.detail-related-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .detail-hero .detail-desc {
   font-size: 20px;
   line-height: 1.55;
@@ -855,4 +875,12 @@
 .btn.chip.ghost.focused {
   border-color: var(--accent);
   background: rgba(94, 234, 212, 0.08);
+}
+
+/* Related-series badges use a stronger focus style: solid accent fill so the
+   currently focused badge reads as the primary action on the row. */
+.detail-related-badges .btn.chip.ghost.focused {
+  background: var(--accent);
+  color: var(--bg-color);
+  border-color: var(--accent);
 }

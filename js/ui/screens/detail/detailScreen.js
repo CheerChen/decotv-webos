@@ -31,6 +31,12 @@ import {
   runPreferEngine,
   savePreferCache
 } from "../../../core/network/preferEngine.js";
+import {
+  getCachedRelated,
+  setCachedRelated,
+  getCachedDetail,
+  setCachedDetail
+} from "../../../core/storage/detailCache.js";
 
 // Monochrome play glyph for the primary action (inherits color via currentColor).
 const PLAY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
@@ -71,6 +77,8 @@ export const DetailScreen = {
     this.preferCancelled = false;
     this.detail = null;
     this.episodeIndex = 0;
+    this._relatedResults = [];
+    this._relatedKeyword = "";
     // On a Back navigation we must NOT auto-play again (that is what made Back
     // "reset" playback — it re-launched the player from episode 0 at 0:00).
     const fromHistory = Boolean(opts?.fromHistory);
@@ -182,6 +190,10 @@ export const DetailScreen = {
           <div class="detail-info">
             <h1 class="detail-title">${title}</h1>
             <div class="detail-tags" id="detailTags"></div>
+            <div class="detail-related" id="detailRelated" style="display:none;">
+              <span class="detail-related-label">系列作品</span>
+              <div class="detail-related-badges" id="detailRelatedBadges"></div>
+            </div>
             <div class="detail-desc" id="detailDesc"></div>
             <div class="detail-cast" id="detailCast"></div>
             <div id="detailStatus" class="detail-status">准备中…</div>
@@ -321,6 +333,110 @@ export const DetailScreen = {
       cast.innerHTML = lines.join("<br>");
       cast.style.display = lines.length ? "" : "none";
     }
+
+    this._maybeFetchRelatedTitles();
+  },
+
+  // Related-series badges: take the first space-separated segment of the
+  // current title as a search keyword, hit /api/search once, and render every
+  // distinct result (deduplicated by title, filtered to prefix matches,
+  // excluding the current title) as a jump badge. Each badge carries the full
+  // search result so clicking it enters detail in single-source mode with no
+  // re-search. No heuristic guessing — the server returns only titles that
+  // actually have playable sources.
+  _relatedResults: [],
+  _relatedKeyword: "",   // dedup guard: keyword already searched this mount
+
+  // In prefer mode the related-titles search is deferred until probe finishes
+  // (onDone) to avoid competing with the 8-way probe burst for server time.
+  // In single mode it fires immediately — only 1 search + 1 detail request.
+  _maybeFetchRelatedTitles() {
+    if (this.mode === "prefer" && this.probeRunning) return;
+    this._fetchRelatedTitles();
+  },
+
+  _fetchRelatedTitles() {
+    const wrap = this.container?.querySelector("#detailRelated");
+    const badgesEl = this.container?.querySelector("#detailRelatedBadges");
+    if (!wrap || !badgesEl) return;
+    const fullTitle = this.currentSource?.title
+      || this.currentSource?.search_title
+      || this.title
+      || "";
+    // The keyword is the first space-separated segment if the title has a
+    // space, otherwise the full title. A bare title like "进击的巨人" is a
+    // valid keyword — searching it returns adjacent seasons / derivatives.
+    const sp = fullTitle.indexOf(" ");
+    const keyword = (sp > 0 ? fullTitle.slice(0, sp) : fullTitle).trim();
+    if (!keyword) { wrap.style.display = "none"; return; }
+
+    // Dedup within a single mount: _renderHeroMeta fires multiple times during
+    // the prefer flow (null → first hit → best). The keyword is the same each
+    // time, so skip once we have already dispatched a fetch for it.
+    if (this._relatedKeyword === keyword) return;
+    this._relatedKeyword = keyword;
+
+    // Cache hit → render immediately, no network request. The cache is keyed
+    // by keyword, so the same keyword never fetches twice across visits.
+    const cached = getCachedRelated(keyword);
+    if (cached) {
+      this._renderRelatedBadges(cached, fullTitle, wrap, badgesEl);
+      return;
+    }
+
+    const epoch = this._mountEpoch;
+    api.searchVideos(keyword).then((data) => {
+      if (epoch !== this._mountEpoch) return; // stale — user navigated away
+      const related = this._filterRelatedResults(data, keyword, fullTitle);
+      setCachedRelated(keyword, related);
+      this._renderRelatedBadges(related, fullTitle, wrap, badgesEl);
+    }).catch(() => {
+      if (epoch !== this._mountEpoch) return;
+      wrap.style.display = "none";
+    });
+  },
+
+  // Filter + dedup + sort the raw search response into a badge-ready list.
+  _filterRelatedResults(data, keyword, fullTitle) {
+    const results = Array.isArray(data?.results) ? data.results : [];
+    const byTitle = new Map();
+    const baseLen = keyword.length;
+    for (const r of results) {
+      const t = (r.title || "").trim();
+      if (!t) continue;
+      if (!t.startsWith(keyword)) continue;
+      if (t === fullTitle.trim()) continue;
+      if (t.length > baseLen * 3 + 6) continue;
+      const prev = byTitle.get(t);
+      const prevEps = prev && Array.isArray(prev.episodes) ? prev.episodes.length : 0;
+      const curEps = Array.isArray(r.episodes) ? r.episodes.length : 0;
+      if (!prev || curEps > prevEps) byTitle.set(t, r);
+    }
+    return Array.from(byTitle.values()).sort((a, b) => {
+      const ea = Array.isArray(a.episodes) ? a.episodes.length : 0;
+      const eb = Array.isArray(b.episodes) ? b.episodes.length : 0;
+      if (eb !== ea) return eb - ea;
+      const ya = Number(a.year) || 0;
+      const yb = Number(b.year) || 0;
+      return yb - ya;
+    }).slice(0, 12);
+  },
+
+  // Render the badge row from a (possibly cached) result list. The current
+  // title is excluded at render time so a cached list stays correct even when
+  // the user navigates between seasons of the same series.
+  _renderRelatedBadges(related, fullTitle, wrap, badgesEl) {
+    const filtered = related.filter((r) => (r.title || "").trim() !== fullTitle.trim());
+    this._relatedResults = filtered;
+    if (!filtered.length) {
+      wrap.style.display = "none";
+      return;
+    }
+    wrap.style.display = "";
+    badgesEl.innerHTML = filtered.map((r, i) =>
+      `<button class="btn chip ghost focusable" data-action="open-related" data-index="${i}">${escapeHtml(r.title)}</button>`
+    ).join("");
+    ScreenUtils.indexFocusables(badgesEl, ".focusable");
   },
 
   async _searchAndPrefer() {
@@ -491,18 +607,29 @@ export const DetailScreen = {
 
   async _maybeFetchDetail() {
     if (!this.currentSource) return;
+    const src = this.currentSource.source;
+    const id = String(this.currentSource.id);
+    // Cache hit — skip the network round-trip. 24h TTL means a new episode
+    // added on the server appears at most 24h late on a repeat visit.
+    const cached = getCachedDetail(src, id);
+    if (cached) {
+      this._applyDetail(cached);
+      return;
+    }
     try {
-      const detail = await api.getVideoDetail(this.currentSource.source, String(this.currentSource.id));
-      this.detail = detail;
-      // Prefer detail/source poster when the hero still has none (common when
-      // entering from continue-watching without a cover field on the record).
-      // Skip known placeholder logos that some sites return as "poster".
-      const cover = detail.poster || detail.cover || this.currentSource.poster;
-      if (cover && !/\/logo\.(jpg|png|webp)/i.test(cover) && !/static\/images\/logo/i.test(cover)) {
-        this._setPoster(cover);
-      }
-      this._renderHeroMeta();
+      const detail = await api.getVideoDetail(src, id);
+      setCachedDetail(src, id, detail);
+      this._applyDetail(detail);
     } catch (e) { /* best-effort — search-hit meta already shown */ }
+  },
+
+  _applyDetail(detail) {
+    this.detail = detail;
+    const cover = detail.poster || detail.cover || this.currentSource.poster;
+    if (cover && !/\/logo\.(jpg|png|webp)/i.test(cover) && !/static\/images\/logo/i.test(cover)) {
+      this._setPoster(cover);
+    }
+    this._renderHeroMeta();
   },
 
   async _startPlayback(source, episodeIndex, opts = {}) {
@@ -601,6 +728,22 @@ export const DetailScreen = {
         return;
       }
       if (action === "favorite") { await this._toggleFavorite(); return; }
+      if (action === "open-related") {
+        const idx = Number(focused.dataset.index);
+        const r = this._relatedResults[idx];
+        if (!r) return;
+        // Enter prefer mode: search all sources, probe, pick best — same
+        // flow as entering from home/douban. Passing the search result's
+        // title/year/poster gives the prefer engine what it needs to filter
+        // and the hero something to show while probing.
+        Router.navigate("detail", {
+          title: r.title,
+          poster: r.poster || "",
+          year: r.year || "",
+          autoPlay: true
+        });
+        return;
+      }
       if (action === "refresh") {
         if (this.probeRunning) { showToast("测速进行中"); return; }
         this.probeResults = new Map();
