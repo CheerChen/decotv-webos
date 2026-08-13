@@ -1,14 +1,14 @@
 {
   "id": "com.cheerchen.decotv",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "type": "web",
   "title": "DecoTV",
   "appDescription": "DecoTV client for webOS — self-hosted server required",
   "iconUri": "https://raw.githubusercontent.com/CheerChen/decotv-webos/main/assets/icons/icon-large.png",
   "sourceUrl": "https://github.com/CheerChen/decotv-webos",
   "rootRequired": false,
-  "ipkUrl": "com.cheerchen.decotv_0.5.2_all.ipk",
+  "ipkUrl": "com.cheerchen.decotv_0.5.3_all.ipk",
   "ipkHash": {
-    "sha256": "108f6990adb992c41f2150cd7378222681cead97f78a8fd3601b0e4d71771bca"
+    "sha256": "f6466ba050a1d3b71a7bd179a86edf64b666c4d10c266b16be2649e17c81a49e"
   }
 }

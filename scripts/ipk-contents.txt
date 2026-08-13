@@ -19,6 +19,7 @@ js/core/playback/adSkipScanner.js
 js/core/playback/outroMark.js
 js/core/playback/stallDetector.js
 js/core/playback/tsResolution.js
+js/core/storage/detailCache.js
 js/core/storage/librarySync.js
 js/core/storage/localLibrary.js
 js/core/storage/localStore.js
