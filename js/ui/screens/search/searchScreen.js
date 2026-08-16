@@ -14,6 +14,8 @@
 import { ScreenUtils } from "../../navigation/screen.js";
 import { Router } from "../../navigation/router.js";
 import { api } from "../../../core/network/decotvClient.js";
+import { tmdb } from "../../../core/network/tmdbClient.js";
+import { getProvider } from "../../../core/storage/catalogProvider.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
 import { posterAttrs } from "../../posterImage.js";
 import { escapeHtml } from "../../utils.js";
@@ -40,6 +42,7 @@ export const SearchScreen = {
 
   async mount(params = {}, opts = {}) {
     this.container = document.getElementById("search");
+    this.provider = getProvider();
     const fromHistory = Boolean(opts?.fromHistory);
     const restoreType = params.type || this.type || "hot-movie";
     const snapshot = fromHistory ? SNAPSHOTS.get(restoreType) : null;
@@ -82,12 +85,13 @@ export const SearchScreen = {
 
     this.results = [];
     const cfg = TYPE_CONFIGS[this.type] || TYPE_CONFIGS["hot-movie"];
+    const acfg = this._activeConfig(cfg);
     // Initialize filter values to defaults.
     this.filterValues = {};
-    for (const f of cfg.filters) {
+    for (const f of acfg.filters) {
       this.filterValues[f.id] = f.default;
     }
-    this.selectedWeekday = this.type === "hot-anime" ? todayWeekday() : null;
+    this.selectedWeekday = (this.provider === "douban" && this.type === "hot-anime") ? todayWeekday() : null;
     const activeTab = `nav-${this.type}`;
     this.container.innerHTML = `
       ${renderNavHeader(activeTab)}
@@ -103,13 +107,23 @@ export const SearchScreen = {
   },
 
   // ── Filter chips ──────────────────────────────────────────────────────────
+
+  // Return the provider-specific config block for the current tab.
+  // Douban fields live on the tab root; TMDB fields live under .tmdb.
+  _activeConfig(cfg) {
+    cfg = cfg || TYPE_CONFIGS[this.type] || TYPE_CONFIGS["hot-movie"];
+    if (this.provider === "tmdb" && cfg.tmdb) return cfg.tmdb;
+    return cfg;
+  },
+
   _renderFilters() {
     const wrap = this.container.querySelector("#searchFilters");
     const cfg = TYPE_CONFIGS[this.type] || TYPE_CONFIGS["hot-movie"];
+    const acfg = this._activeConfig(cfg);
 
     // Build chip rows from config filters.
     const rows = [];
-    for (const f of cfg.filters) {
+    for (const f of acfg.filters) {
       // showWhen: only render this row when another filter has a specific value.
       if (f.showWhen && this.filterValues[f.showWhen.field || "mode"] !== f.showWhen.value) {
         // Legacy: showWhen is a string shorthand for { field: "mode", value: <string> }.
@@ -128,9 +142,10 @@ export const SearchScreen = {
       rows.push(`<div class="chip-row${scrollClass}" id="row-${f.id}"><span class="chip-label">${f.label}</span>${scrollWrap}</div>`);
     }
 
-    // Weekday row for hot-anime "每日放送".
+    // Weekday row for hot-anime "每日放送" (Douban only — TMDB has no
+    // airing calendar).
     let weekdayHtml = "";
-    if (cfg.hasWeekday && this.filterValues.type === "每日放送") {
+    if (this.provider === "douban" && cfg.hasWeekday && this.filterValues.type === "每日放送") {
       weekdayHtml = `<div class="chip-row" id="weekdayRow"><span class="chip-label">星期</span>${
         WEEKDAYS.map((d) => {
           const active = d.value === this.selectedWeekday ? " active" : "";
@@ -169,10 +184,15 @@ export const SearchScreen = {
     }
   },
 
-  // Dispatch to the correct API based on endpoint type + filter values.
+  // Dispatch to the correct API based on provider + endpoint type + filter values.
   async _fetchCategory() {
     const cfg = TYPE_CONFIGS[this.type];
     const fv = this.filterValues;
+
+    // ── TMDB provider ──
+    if (this.provider === "tmdb" && cfg.tmdb) {
+      return this._fetchTmdb(cfg.tmdb, fv);
+    }
 
     // ── mixed-anime (hot-anime): 全部/每日放送 → recent_hot, 国家 → recommend ──
     if (cfg.endpoint === "mixed-anime") {
@@ -241,6 +261,52 @@ export const SearchScreen = {
     return [];
   },
 
+  // TMDB provider: route to sidecar chart or discover endpoint.
+  // `tcfg` is the cfg.tmdb block (endpoint, mediaType, genrePreset, ...).
+  async _fetchTmdb(tcfg, fv) {
+    const mediaType = tcfg.mediaType || "movie";
+    if (tcfg.endpoint === "chart") {
+      const chart = fv.chart || "hot";
+      const data = await tmdb.getChart(mediaType, chart, 1);
+      return this._normalizeTmdbList(data);
+    }
+    if (tcfg.endpoint === "discover") {
+      // Documentary "hot" mode: discover with genrePreset + popularity sort,
+      // ignoring the user's sort/region/year chips (they are hidden by
+      // showWhen). "curated" mode: pass through all filters.
+      const genre = tcfg.genrePreset || fv.genre || "";
+      const sort = (fv.mode === "hot" && !fv.sort) ? "popularity" : (fv.sort || "popularity");
+      // Anime tab: 地区=全部 means Japanese animation (defaultLanguage), a
+      // picked region (日本/欧美/华语) maps to that country's language.
+      const region = fv.region || "";
+      const language = (!region && tcfg.defaultLanguage) ? tcfg.defaultLanguage : "";
+      const data = await tmdb.getDiscover({
+        mediaType,
+        genre,
+        region,
+        language,
+        year: fv.year || "",
+        sort,
+        page: 1,
+        // 综艺/纪录片 collapse franchise repeats (Paradise Hotel x3).
+        dedupe: tcfg.dedupe ? "1" : "",
+      });
+      return this._normalizeTmdbList(data);
+    }
+    return [];
+  },
+
+  // TMDB sidecar returns {list:[{id,title,poster,rate,year}]} where poster
+  // is a full image.tmdb.org URL. Wrap it through the sidecar image proxy
+  // so posterImage.js routes it via lunaSidecarFetchImage.
+  _normalizeTmdbList(data) {
+    const list = Array.isArray(data?.list) ? data.list : [];
+    return list.map((item) => ({
+      ...item,
+      poster: tmdb.getImageUrl(item.poster) || item.poster,
+    }));
+  },
+
   _renderResults() {
     const body = this.container.querySelector("#searchBody");
     if (!this.results.length) {
@@ -285,8 +351,9 @@ export const SearchScreen = {
   // Build heading suffix from active filter labels.
   _currentTagLabel() {
     const cfg = TYPE_CONFIGS[this.type];
+    const acfg = this._activeConfig(cfg);
     const parts = [];
-    for (const f of cfg.filters) {
+    for (const f of acfg.filters) {
       // Skip filters that are not visible (showWhen not met).
       if (f.showWhen) {
         const showVal = typeof f.showWhen === "string" ? f.showWhen : f.showWhen.value;
@@ -295,11 +362,11 @@ export const SearchScreen = {
       const opt = f.options.find((o) => o.value === this.filterValues[f.id]);
       const label = opt?.label || this.filterValues[f.id];
       // Skip "全部" in heading to keep it concise — except for single-filter tabs.
-      if (label === "全部" && cfg.filters.length > 1) continue;
+      if (label === "全部" && acfg.filters.length > 1) continue;
       parts.push(label);
     }
-    // Add weekday for hot-anime 每日放送.
-    if (cfg.hasWeekday && this.filterValues.type === "每日放送") {
+    // Add weekday for hot-anime 每日放送 (Douban only).
+    if (this.provider === "douban" && cfg.hasWeekday && this.filterValues.type === "每日放送") {
       const wd = WEEKDAYS.find((d) => d.value === this.selectedWeekday);
       parts.push(wd?.label || this.selectedWeekday);
     }

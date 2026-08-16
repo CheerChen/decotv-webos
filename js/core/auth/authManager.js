@@ -9,6 +9,7 @@
 // Any 401 elsewhere → re-run bootstrap.
 
 import { api, STORAGE_BASEURL } from "../network/decotvClient.js";
+import { tmdb } from "../network/tmdbClient.js";
 import { LocalStore } from "../storage/localStore.js";
 import { t } from "../i18n.js";
 
@@ -146,6 +147,9 @@ export const AuthManager = {
       return;
     }
     api.setBaseUrl(stored);
+    // Restore TMDB sidecar URL from storage so TMDB tabs work on launch.
+    const sidecarUrl = tmdb.getStoredSidecarUrl();
+    if (sidecarUrl) tmdb.setSidecarUrl(sidecarUrl);
 
     // Fast path: use cached server config to skip a network round-trip.
     const cachedCfg = api.getStoredServerConfig();

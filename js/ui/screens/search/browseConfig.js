@@ -1,4 +1,8 @@
 // browseConfig.js — static browse filters and tab definitions.
+// Each tab carries a Douban config (the default) plus a `tmdb` block that
+// describes how the same tab maps to the TMDB sidecar when the user
+// switches provider in settings. The search screen reads the active
+// provider from a shared store and picks the right branch.
 
 export const YEAR_OPTIONS = [
   { label: "全部", value: "all" },
@@ -70,20 +74,18 @@ export const SHOW_GENRES = [
   { label: "谈话", value: "谈话" },
 ];
 
-// Full region list for recommend tabs (11 regions, all return 24 items).
+// Full region list for recommend tabs (10 regions, all return 24 items).
 export const REGIONS_FULL = [
   { label: "全部", value: "" },
   { label: "华语", value: "华语" },
-  { label: "欧美", value: "欧美" },
   { label: "美国", value: "美国" },
   { label: "日本", value: "日本" },
   { label: "韩国", value: "韩国" },
-  { label: "中国", value: "中国" },
   { label: "中国香港", value: "中国香港" },
   { label: "中国台湾", value: "中国台湾" },
+  { label: "印度", value: "印度" },
   { label: "法国", value: "法国" },
   { label: "英国", value: "英国" },
-  { label: "印度", value: "印度" },
 ];
 
 // Anime regions (subset — recommend category=动画 works with these 4).
@@ -133,6 +135,22 @@ export const TYPE_CONFIGS = {
         default: "全部",
       },
     ],
+    tmdb: {
+      endpoint: "chart",
+      mediaType: "movie",
+      filters: [
+        {
+          id: "chart", label: "榜单",
+          options: [
+            { label: "周趋势", value: "hot" },
+            { label: "正在上映", value: "latest" },
+            { label: "高分榜", value: "top_rated" },
+            { label: "冷门佳片", value: "hidden_gems" },
+          ],
+          default: "hot",
+        },
+      ],
+    },
   },
   "hot-tv": {
     label: "热门剧集",
@@ -152,6 +170,22 @@ export const TYPE_CONFIGS = {
         default: "tv",
       },
     ],
+    tmdb: {
+      endpoint: "chart",
+      mediaType: "tv",
+      filters: [
+        {
+          id: "chart", label: "榜单",
+          options: [
+            { label: "周趋势", value: "hot" },
+            { label: "今日播出", value: "latest" },
+            { label: "高分榜", value: "top_rated" },
+            { label: "冷门佳片", value: "hidden_gems" },
+          ],
+          default: "hot",
+        },
+      ],
+    },
   },
   "hot-anime": {
     label: "热门动漫",
@@ -170,6 +204,29 @@ export const TYPE_CONFIGS = {
       },
     ],
     hasWeekday: true,
+    // TMDB has no airing-calendar equivalent; use discover with the
+    // animation genre, sorted by popularity. The chart chip becomes a
+    // sort selector instead.
+    tmdb: {
+      endpoint: "discover",
+      mediaType: "tv",
+      genrePreset: "16",
+      // Chinese 动漫 ≈ Japanese animation. 地区=全部 defaults to ja so the
+      // tab isn't flooded with US cartoons; picking 日本/欧美/华语 narrows
+      // to that country's animation via the language param.
+      defaultLanguage: "ja",
+      filters: [
+        {
+          id: "sort", label: "排序",
+          options: [
+            { label: "热门", value: "popularity" },
+            { label: "高分", value: "vote_average" },
+            { label: "最新", value: "first_air_date" },
+          ],
+          default: "popularity",
+        },
+      ],
+    },
   },
   "hot-show": {
     label: "热门综艺",
@@ -187,6 +244,25 @@ export const TYPE_CONFIGS = {
         default: "show",
       },
     ],
+    // TMDB genre 10764 = Reality. Discover with that genre, sorted by
+    // popularity. dedupe collapses franchise repeats (Paradise Hotel x3).
+    tmdb: {
+      endpoint: "discover",
+      mediaType: "tv",
+      genrePreset: "10764",
+      dedupe: true,
+      filters: [
+        {
+          id: "sort", label: "排序",
+          options: [
+            { label: "热门", value: "popularity" },
+            { label: "高分", value: "vote_average" },
+            { label: "最新", value: "first_air_date" },
+          ],
+          default: "popularity",
+        },
+      ],
+    },
   },
 
   // ── 精选系列 (recommend) ──
@@ -200,6 +276,16 @@ export const TYPE_CONFIGS = {
       { id: "year", label: "年代", options: YEAR_OPTIONS, default: "all" },
       { id: "sort", label: "排序", options: SORT_OPTIONS, default: "S" },
     ],
+    tmdb: {
+      endpoint: "discover",
+      mediaType: "movie",
+      filters: [
+        { id: "genre", label: "类型", options: MOVIE_GENRES, default: "" },
+        { id: "region", label: "地区", options: REGIONS_FULL, default: "" },
+        { id: "year", label: "年代", options: YEAR_OPTIONS, default: "all" },
+        { id: "sort", label: "排序", options: SORT_OPTIONS, default: "S" },
+      ],
+    },
   },
   tv: {
     label: "剧集",
@@ -212,6 +298,16 @@ export const TYPE_CONFIGS = {
       { id: "year", label: "年代", options: YEAR_OPTIONS, default: "all" },
       { id: "sort", label: "排序", options: SORT_OPTIONS, default: "S" },
     ],
+    tmdb: {
+      endpoint: "discover",
+      mediaType: "tv",
+      filters: [
+        { id: "genre", label: "类型", options: TV_GENRES, default: "" },
+        { id: "region", label: "地区", options: REGIONS_FULL, default: "" },
+        { id: "year", label: "年代", options: YEAR_OPTIONS, default: "all" },
+        { id: "sort", label: "排序", options: SORT_OPTIONS, default: "S" },
+      ],
+    },
   },
   anime: {
     label: "动漫",
@@ -224,6 +320,17 @@ export const TYPE_CONFIGS = {
       { id: "year", label: "年代", options: YEAR_OPTIONS, default: "all" },
       { id: "sort", label: "排序", options: SORT_OPTIONS, default: "S" },
     ],
+    tmdb: {
+      endpoint: "discover",
+      mediaType: "tv",
+      genrePreset: "16",
+      defaultLanguage: "ja",
+      filters: [
+        { id: "region", label: "地区", options: REGIONS_ANIME, default: "" },
+        { id: "year", label: "年代", options: YEAR_OPTIONS, default: "all" },
+        { id: "sort", label: "排序", options: SORT_OPTIONS, default: "S" },
+      ],
+    },
   },
   show: {
     label: "综艺",
@@ -236,6 +343,17 @@ export const TYPE_CONFIGS = {
       { id: "year", label: "年代", options: YEAR_OPTIONS, default: "all" },
       { id: "sort", label: "排序", options: SORT_OPTIONS, default: "S" },
     ],
+    tmdb: {
+      endpoint: "discover",
+      mediaType: "tv",
+      genrePreset: "10764",
+      dedupe: true,
+      filters: [
+        { id: "region", label: "地区", options: REGIONS_FULL, default: "" },
+        { id: "year", label: "年代", options: YEAR_OPTIONS, default: "all" },
+        { id: "sort", label: "排序", options: SORT_OPTIONS, default: "S" },
+      ],
+    },
   },
 
   // ── 纪录片 (mixed: recent_hot default + recommend curated) ──
@@ -255,6 +373,28 @@ export const TYPE_CONFIGS = {
       { id: "year", label: "年代", options: YEAR_OPTIONS, default: "all", showWhen: "curated" },
       { id: "sort", label: "排序", options: SORT_OPTIONS, default: "S", showWhen: "curated" },
     ],
+    // TMDB genre 99 = Documentary. Chart for the "hot" mode, discover for
+    // "curated" — same mode toggle, different backend. dedupe collapses
+    // franchise repeats (蠢蛋搞怪秀 x4).
+    tmdb: {
+      endpoint: "discover",
+      mediaType: "movie",
+      genrePreset: "99",
+      dedupe: true,
+      filters: [
+        {
+          id: "mode", label: "分类",
+          options: [
+            { label: "热门榜单", value: "hot" },
+            { label: "精选筛选", value: "curated" },
+          ],
+          default: "hot",
+        },
+        { id: "region", label: "地区", options: REGIONS_DOC, default: "", showWhen: "curated" },
+        { id: "year", label: "年代", options: YEAR_OPTIONS, default: "all", showWhen: "curated" },
+        { id: "sort", label: "排序", options: SORT_OPTIONS, default: "S", showWhen: "curated" },
+      ],
+    },
   },
 };
 
