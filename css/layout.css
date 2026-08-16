@@ -70,11 +70,14 @@
      overflow-y to clip as well, so scale(1.06) + focus ring were cropped
      on home rails while the category grid (overflow:visible) looked fine.
      scale(1.06) on a ~220×370 card grows ~7px/side; +3px ring → ≥12px.
-     Negative margin keeps the unfocused rail aligned with section titles. */
+     Negative margin keeps the unfocused rail aligned with section titles.
+     scroll-padding keeps the snap position inside the padding so the first
+     card's focus ring is not clipped by overflow-x. */
   overflow-x: auto;
-  padding: 18px 12px 36px;
+  padding: 18px 22px 36px;
   margin: -10px -12px 0;
   scroll-snap-type: x mandatory;
+  scroll-padding: 0 22px;
 }
 
 .section-title {
