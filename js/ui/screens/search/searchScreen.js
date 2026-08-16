@@ -21,6 +21,13 @@ import { TYPE_CONFIGS, WEEKDAYS, todayWeekday, bangumiToCards } from "./browseCo
 
 const PAGE_SIZE = 24;
 
+// In-memory snapshots keyed by tab type. Only needed across one Back
+// navigation (detail → search), so a module-level Map is enough — no
+// localStorage, no TTL, no cross-restart persistence. Mirrors the
+// detailScreen prefer-cache pattern but lighter: filter state is cheap to
+// rebuild and meaningless after an app restart.
+const SNAPSHOTS = new Map();
+
 export const SearchScreen = {
   container: null,
   results: [],
@@ -31,13 +38,49 @@ export const SearchScreen = {
   selectedWeekday: null,
   abortCtrl: null,
 
-  async mount(params = {}) {
+  async mount(params = {}, opts = {}) {
     this.container = document.getElementById("search");
-    this.results = [];
-    this.type = params.type || "hot-movie";
+    const fromHistory = Boolean(opts?.fromHistory);
+    const restoreType = params.type || this.type || "hot-movie";
+    const snapshot = fromHistory ? SNAPSHOTS.get(restoreType) : null;
+
+    this.type = restoreType;
     // Digit shortcuts request first-cover focus; tab clicks leave the default
     // (filter chip) so D-pad filter browsing is unchanged.
     this.focusFirstItem = Boolean(params.focusFirstItem);
+
+    if (snapshot) {
+      // Restore the exact filter/list/scroll/focus the user had before
+      // navigating to detail. No re-fetch — the category chart is unlikely
+      // to have changed in the seconds since they left.
+      this.results = snapshot.results;
+      this.filterValues = { ...snapshot.filterValues };
+      this.selectedWeekday = snapshot.selectedWeekday;
+      this.abortCtrl = null;
+      const activeTab = `nav-${this.type}`;
+      this.container.innerHTML = `
+        ${renderNavHeader(activeTab)}
+        <div class="content-scroll" id="searchScroll">
+          <div id="searchFilters"></div>
+          <div id="searchBody"></div>
+        </div>
+      `;
+      ScreenUtils.show(this.container);
+      bindNavClicks(this.container);
+      this._renderFilters();
+      this._renderResults();
+      // Restore scroll + focus after the DOM is laid out.
+      const scroll = this.container.querySelector("#searchScroll");
+      if (scroll && snapshot.scrollTop) scroll.scrollTop = snapshot.scrollTop;
+      if (snapshot.focusMarker) {
+        const restored = Array.from(this.container.querySelectorAll(".focusable"))
+          .find((n) => ScreenUtils.focusMarker(n) === snapshot.focusMarker);
+        if (restored) ScreenUtils.setInitialFocus(restored);
+      }
+      return;
+    }
+
+    this.results = [];
     const cfg = TYPE_CONFIGS[this.type] || TYPE_CONFIGS["hot-movie"];
     // Initialize filter values to defaults.
     this.filterValues = {};
@@ -300,6 +343,21 @@ export const SearchScreen = {
   },
 
   cleanup() {
+    // Snapshot the live state so a Back from detail restores the exact
+    // filters / list / scroll / focus the user had. Only worth saving when
+    // we actually have results — an aborted load or empty screen has nothing
+    // to restore and would just mask the fresh default-load path.
+    if (this.type && this.results.length) {
+      const scroll = this.container?.querySelector("#searchScroll");
+      const focused = this.container?.querySelector(".focused");
+      SNAPSHOTS.set(this.type, {
+        results: this.results,
+        filterValues: { ...this.filterValues },
+        selectedWeekday: this.selectedWeekday,
+        scrollTop: scroll?.scrollTop || 0,
+        focusMarker: focused ? ScreenUtils.focusMarker(focused) : "",
+      });
+    }
     if (this.abortCtrl) this.abortCtrl.abort();
     ScreenUtils.hide(this.container);
   }
