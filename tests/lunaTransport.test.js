@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import {
   LunaResponse,
   hasLunaTransport,
-  lunaFetchImage
+  lunaFetchImage,
+  lunaSidecarFetchImage
 } from "../js/core/network/lunaTransport.js";
 
 describe("Luna transport response", () => {
@@ -23,6 +24,75 @@ describe("Luna transport response", () => {
 
   test("is unavailable outside the webOS runtime", () => {
     assert.equal(hasLunaTransport(), false);
+  });
+
+  test("lunaSidecarFetchImage routes via fetchSidecar with base64 encoding", async () => {
+    const previous = globalThis.window;
+    let call;
+    globalThis.window = {
+      webOS: {
+        service: {
+          request(uri, options) {
+            call = { uri, method: options.method, parameters: options.parameters };
+            options.onSuccess({
+              returnValue: true,
+              status: 200,
+              contentType: "image/jpeg",
+              encoding: "base64",
+              body: Buffer.from("poster-bytes").toString("base64")
+            });
+            return { cancel() {} };
+          }
+        }
+      }
+    };
+    try {
+      const result = await lunaSidecarFetchImage(
+        "http://192.168.0.110:4001",
+        "http://192.168.0.110:4001/api/image?url=https%3A%2F%2Fimage.tmdb.org%2Ft%2Fp%2Fw500%2Fa.jpg"
+      );
+      assert.equal(call.method, "fetchSidecar");
+      // Full sidecar URL is reduced to the relative path the service expects.
+      assert.equal(
+        call.parameters.path,
+        "/api/image?url=https%3A%2F%2Fimage.tmdb.org%2Ft%2Fp%2Fw500%2Fa.jpg"
+      );
+      assert.equal(call.parameters.responseEncoding, "base64");
+      assert.equal(result.contentType, "image/jpeg");
+      assert.equal(result.source, "sidecar");
+      // The Luna body is base64; the caller decodes it later via atob.
+      assert.equal(result.base64, Buffer.from("poster-bytes").toString("base64"));
+    } finally {
+      globalThis.window = previous;
+    }
+  });
+
+  test("lunaSidecarFetchImage parses bare paths through URL", async () => {
+    const previous = globalThis.window;
+    let call;
+    globalThis.window = {
+      webOS: {
+        service: {
+          request(uri, options) {
+            call = { parameters: options.parameters };
+            options.onSuccess({ returnValue: true, status: 200, body: "" });
+            return { cancel() {} };
+          }
+        }
+      }
+    };
+    try {
+      await lunaSidecarFetchImage(
+        "http://192.168.0.110:4001",
+        "/api/image?url=https%3A%2F%2Fimage.tmdb.org%2Ft%2Fp%2Fw500%2Fb.jpg"
+      );
+      assert.equal(
+        call.parameters.path,
+        "/api/image?url=https%3A%2F%2Fimage.tmdb.org%2Ft%2Fp%2Fw500%2Fb.jpg"
+      );
+    } finally {
+      globalThis.window = previous;
+    }
   });
 
   test("passes both the selected server and logical image URL to Luna", async () => {

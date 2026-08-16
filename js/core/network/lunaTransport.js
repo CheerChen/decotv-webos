@@ -125,6 +125,62 @@ export async function lunaFetchImage(baseUrl, url) {
   };
 }
 
+// Sidecar fetch: TMDB catalog sidecar, no auth cookie. Same Luna bus
+// call shape as lunaFetch but routed to the fetchSidecar service method
+// which does not enforce the /api/ prefix or session cookie.
+export async function lunaSidecarFetch(baseUrl, path, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 10000;
+  const result = await serviceCall("fetchSidecar", {
+    baseUrl,
+    path,
+    method: options.method || "GET",
+    contentType: options.headers?.["Content-Type"] || options.headers?.["content-type"] || "",
+    body: options.body || "",
+    responseEncoding: options.responseEncoding || "",
+    timeoutMs
+  }, {
+    signal: options.signal,
+    timeoutMs: timeoutMs > 0 ? timeoutMs + 3000 : 63000
+  });
+
+  if (!result?.returnValue) {
+    throw new Error(result?.error || "LUNA_SIDECAR_FAILED");
+  }
+  return new LunaResponse(result);
+}
+
+// Sidecar image fetch: TMDB images via the sidecar's /api/image endpoint.
+// No cookie, no Douban host allowlist. Reuses the fetchSidecar method with
+// base64 response encoding — the same Buffer.concat().toString("base64")
+// path that works for catalog JSON, avoiding a separate service handler
+// whose base64 field gets mangled by the Luna bus.
+export async function lunaSidecarFetchImage(baseUrl, url) {
+  // Extract the relative path from the full URL — fetchSidecar expects
+  // a path like "/api/image?url=...", not an absolute URL.
+  let path = url;
+  if (url.startsWith(baseUrl)) {
+    path = url.slice(baseUrl.length);
+  } else {
+    try {
+      const parsed = new URL(url);
+      path = parsed.pathname + parsed.search;
+    } catch (_) { /* use raw url as-is */ }
+  }
+  const response = await lunaSidecarFetch(baseUrl, path, {
+    responseEncoding: "base64",
+    timeoutMs: 40000
+  });
+  if (!response.ok) {
+    throw new Error(`SIDECAR_IMAGE_HTTP_${response.status}`);
+  }
+  const contentType = response.headers.get("content-type") || "image/jpeg";
+  return {
+    base64: response._body,
+    contentType,
+    source: "sidecar"
+  };
+}
+
 export async function getLunaSession(baseUrl) {
   if (!hasLunaTransport()) return { available: false, hasSession: false };
   const result = await serviceCall("diagnostics", { baseUrl });
