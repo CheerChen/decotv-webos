@@ -31,9 +31,9 @@ function readClientVersion() {
   });
 }
 
-function infoRow(label, value) {
+function infoRow(label, value, rowKey = "") {
   return `
-    <div class="settings-item settings-item-readonly">
+    <div class="settings-item settings-item-readonly"${rowKey ? ` data-row="${rowKey}"` : ""}>
       <div class="settings-label">${escapeHtml(label)}</div>
       <div class="settings-value">${escapeHtml(value)}</div>
     </div>
@@ -54,9 +54,13 @@ export const SettingsScreen = {
     const storageType = AuthManager.serverConfig?.StorageType || "—";
     const authMode = AuthManager.serverConfig?.AuthMode || "—";
     const clientVersion = await readClientVersion();
-    const tmdbSidecarUrl = tmdb.getStoredSidecarUrl() || "—";
     const provider = getProvider();
     const providerLabel = provider === "tmdb" ? t("settings.providerTmdb") : t("settings.providerDouban");
+    // Sidecar address is derived (same host, port 4001), never typed. The
+    // value shows the derived address only while the sidecar is reachable;
+    // otherwise "—" (not deployed / not running).
+    const derivedSidecar = tmdb.deriveSidecarUrl(baseUrl);
+    const tmdbSidecarValue = "—"; // replaced by probeSidecar below
 
     // Left: focusable actions. Right: read-only client + server facts.
     this.container.innerHTML = `
@@ -78,11 +82,6 @@ export const SettingsScreen = {
                 <div class="settings-label">${t("settings.catalogProvider")}</div>
                 <div class="settings-value">${escapeHtml(providerLabel)}</div>
               </div>
-              ${provider === "tmdb" ? `
-              <div class="settings-item focusable" data-action="edit-tmdb-sidecar">
-                <div class="settings-label">${t("settings.tmdbSidecar")}</div>
-                <div class="settings-value">${escapeHtml(tmdbSidecarUrl)}</div>
-              </div>` : ""}
               <div class="settings-item focusable" data-action="clear-records">
                 <div class="settings-label">${t("settings.clearRecords")}</div>
                 <div class="settings-value">›</div>
@@ -104,6 +103,7 @@ export const SettingsScreen = {
             <div class="settings-list">
               ${infoRow(t("settings.siteName"), siteName)}
               ${infoRow(t("settings.serverUrl"), baseUrl)}
+              ${infoRow(t("settings.tmdbSidecar"), tmdbSidecarValue, "tmdb-sidecar")}
               ${infoRow(t("settings.serverVersion"), serverVersion)}
               ${infoRow(t("settings.storageType"), storageType)}
               ${infoRow(t("settings.authMode"), authMode)}
@@ -119,6 +119,27 @@ export const SettingsScreen = {
       this.container.querySelector(`.settings-item[data-action="${focusAction}"]`)
       || this.container.querySelector('.settings-item[data-action="change-server"]')
     );
+
+    // Probe the derived sidecar address: show it only while reachable.
+    // The row is rendered as "—" initially and upgraded in place when the
+    // sidecar answers /healthz. This keeps the server info honest without
+    // asking the user to type anything.
+    this._probeSidecarRow(derivedSidecar);
+  },
+
+  // GET /healthz on the derived sidecar URL with a short timeout. On success
+  // the row value becomes the address; otherwise it stays "—".
+  _probeSidecarRow(derivedSidecar) {
+    const row = this.container?.querySelector('[data-row="tmdb-sidecar"] .settings-value');
+    if (!row || !derivedSidecar) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    fetch(`${derivedSidecar}/healthz`, { signal: controller.signal })
+      .then((res) => {
+        if (res.ok) row.textContent = derivedSidecar;
+      })
+      .catch(() => { /* not reachable → keep "—" */ })
+      .finally(() => clearTimeout(timer));
   },
 
   async onKeyDown(event) {
@@ -152,10 +173,6 @@ export const SettingsScreen = {
         Router.navigate("settings", { focusAction: "toggle-provider" });
         return;
       }
-      if (action === "edit-tmdb-sidecar") {
-        this._editTmdbSidecar(focused);
-        return;
-      }
       if (action === "logout") {
         await AuthManager.logout();
         return;
@@ -169,44 +186,6 @@ export const SettingsScreen = {
       }
       if (handleNavAction(action)) return;
     }
-  },
-
-  // Inline-edit the TMDB sidecar URL. Replaces the value cell with a text
-  // input; Enter saves, Back/Escape cancels and restores the display value.
-  _editTmdbSidecar(row) {
-    const valueCell = row.querySelector(".settings-value");
-    if (!valueCell) return;
-    const current = tmdb.getStoredSidecarUrl() || "";
-    valueCell.innerHTML = `<input class="form-input settings-inline-input" type="text" value="${escapeHtml(current)}" placeholder="${escapeHtml(t("settings.tmdbSidecarHint"))}" autocomplete="off" spellcheck="false" />`;
-    const input = valueCell.querySelector("input");
-    if (!input) return;
-    ScreenUtils.setFocus(input, this.container);
-    input.focus();
-    const restore = () => {
-      const saved = tmdb.getStoredSidecarUrl() || "—";
-      valueCell.textContent = saved;
-      ScreenUtils.setFocus(row, this.container);
-    };
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        let url = (input.value || "").trim();
-        if (url && !/^https?:\/\//i.test(url)) url = `http://${url}`;
-        tmdb.setSidecarUrl(url);
-        showToast(t("settings.tmdbSidecarSaved"));
-        restore();
-      } else if (e.key === "Back" || e.key === "Escape" || e.keyCode === 461) {
-        e.preventDefault();
-        restore();
-      }
-    });
-    input.addEventListener("blur", () => {
-      // Give Enter/Escape a chance to fire first; if focus left without
-      // saving, just restore the display value.
-      setTimeout(() => {
-        if (valueCell.querySelector("input")) restore();
-      }, 200);
-    });
   },
 
   cleanup() {

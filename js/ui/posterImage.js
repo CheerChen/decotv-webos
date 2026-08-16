@@ -60,7 +60,7 @@ function pump() {
 
 function resolve(url) {
   const baseUrl = api.baseURL || api.getStoredBaseUrl() || "";
-  const sidecarUrl = tmdb.sidecarUrl || tmdb.getStoredSidecarUrl() || "";
+  const sidecarUrl = tmdb.resolveSidecarUrl(baseUrl);
   // Sidecar URLs (TMDB images) go through a separate fetch path that
   // does not need the DecoTV auth cookie and is not restricted to
   // Douban image hosts.

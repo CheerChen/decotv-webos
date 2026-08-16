@@ -13,10 +13,35 @@ import {
 } from "./lunaTransport.js";
 
 const STORAGE_SIDECAR_URL = "decotv.tmdbSidecarUrl";
+// Sidecar sits next to the DecoTV server: same host, port 4001. When no
+// explicit URL is stored (the common case), it is derived from the
+// configured DecoTV server address — the user never types it.
+const SIDECAR_PORT = 4001;
 
 export class TmdbClient {
   constructor() {
     this.sidecarUrl = "";
+    this.serverBaseUrl = "";
+  }
+
+  // The DecoTV server this client is connected to; the sidecar is derived
+  // from it (same host, port 4001). Set during auth bootstrap alongside
+  // api.setBaseUrl.
+  setServerBaseUrl(url) {
+    this.serverBaseUrl = String(url || "").trim();
+  }
+
+  // Derive the sidecar URL from the DecoTV server base URL (same host,
+  // fixed port 4001). Returns "" when no server is configured.
+  deriveSidecarUrl(serverBaseUrl) {
+    const base = String(serverBaseUrl || "").trim() || this.serverBaseUrl;
+    if (!base) return "";
+    try {
+      const u = new URL(base);
+      return `${u.protocol}//${u.hostname}:${SIDECAR_PORT}`;
+    } catch (_) {
+      return "";
+    }
   }
 
   setSidecarUrl(url) {
@@ -30,15 +55,32 @@ export class TmdbClient {
     return LocalStore.get(STORAGE_SIDECAR_URL, null);
   }
 
-  isConfigured() {
-    return Boolean(this.sidecarUrl || this.getStoredSidecarUrl());
+  isConfigured(serverBaseUrl) {
+    return Boolean(
+      this.sidecarUrl ||
+      this.getStoredSidecarUrl() ||
+      this.deriveSidecarUrl(serverBaseUrl)
+    );
+  }
+
+  // Resolve the sidecar URL to use: explicit stored value wins, otherwise
+  // derived from the DecoTV server address.
+  resolveSidecarUrl(serverBaseUrl) {
+    return this.sidecarUrl || this.getStoredSidecarUrl() || this.deriveSidecarUrl(serverBaseUrl) || "";
   }
 
   _ensureUrl() {
-    if (!this.sidecarUrl) {
-      this.sidecarUrl = this.getStoredSidecarUrl() || "";
+    if (this.sidecarUrl) return this.sidecarUrl;
+    const stored = this.getStoredSidecarUrl();
+    if (stored) {
+      this.sidecarUrl = stored;
+      return this.sidecarUrl;
     }
-    if (!this.sidecarUrl) throw new Error("SIDECAR_URL_NOT_SET");
+    // Not stored — derive from the DecoTV server the app is connected to
+    // (same host, port 4001).
+    const derived = this.deriveSidecarUrl();
+    if (!derived) throw new Error("SIDECAR_URL_NOT_SET");
+    this.sidecarUrl = derived;
     return this.sidecarUrl;
   }
 
@@ -123,7 +165,7 @@ export class TmdbClient {
   // produces the logical URL that posterImage.js will resolve.
   getImageUrl(tmdbImagePath) {
     if (!tmdbImagePath) return "";
-    const baseUrl = this.sidecarUrl || this.getStoredSidecarUrl() || "";
+    const baseUrl = this.resolveSidecarUrl();
     if (!baseUrl) return "";
     // tmdbImagePath is either a full URL or a /xxxx.jpg path.
     const fullUrl = tmdbImagePath.startsWith("http")
