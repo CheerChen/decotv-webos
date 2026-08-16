@@ -4,6 +4,8 @@
 import { ScreenUtils } from "../../navigation/screen.js";
 import { Router } from "../../navigation/router.js";
 import { api } from "../../../core/network/decotvClient.js";
+import { tmdb } from "../../../core/network/tmdbClient.js";
+import { getProvider } from "../../../core/storage/catalogProvider.js";
 import { showToast } from "../../toast.js";
 import { LocalLibrary } from "../../../core/storage/localLibrary.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
@@ -45,6 +47,7 @@ export const HomeScreen = {
     this.container = document.getElementById("home");
     this.rowsData = [];
     this.loading = true;
+    this.provider = getProvider();
     // Digit 0 (and any caller that asks) prefers the first cover over the
     // nav tab — setInitialFocus runs once the first poster-card appears.
     this.focusFirstItem = Boolean(params.focusFirstItem);
@@ -131,6 +134,10 @@ export const HomeScreen = {
   },
 
   async _fetchRow(row) {
+    // TMDB provider: home rows mirror the search tabs' data sources.
+    if (this.provider === "tmdb") {
+      return this._fetchTmdbRow(row);
+    }
     if (row.fetch === "categories") {
       const data = await api.getDoubanCategories(
         row.kind,
@@ -144,6 +151,35 @@ export const HomeScreen = {
     // Default: classic /api/douban chart by type + tag.
     const data = await api.getDoubanData(row.type, row.tag, PAGE_SIZE, 0);
     return Array.isArray(data?.list) ? data.list : [];
+  },
+
+  // Home rows under TMDB provider. Douban charts map onto the same tab
+  // sources the search screen uses (chart for movie/tv, discover for
+  // anime/show), so home and tabs stay consistent.
+  async _fetchTmdbRow(row) {
+    let data;
+    if (row.fetch === "categories" && row.type === "tv_animation") {
+      // 热门动漫 → Japanese animation (anime tab default).
+      data = await tmdb.getDiscover({
+        mediaType: "tv", genre: "16", language: "ja", sort: "popularity", page: 1,
+      });
+    } else if (row.fetch === "categories" && row.type === "show") {
+      // 热门综艺 → reality (综艺 tab).
+      data = await tmdb.getDiscover({
+        mediaType: "tv", genre: "10764", sort: "popularity", page: 1, dedupe: "1",
+      });
+    } else if (row.type === "tv") {
+      data = await tmdb.getChart("tv", "hot", 1);
+    } else {
+      data = await tmdb.getChart("movie", "hot", 1);
+    }
+    const list = Array.isArray(data?.list) ? data.list : [];
+    // Poster comes back as a raw image.tmdb.org URL; wrap it through the
+    // sidecar image proxy so posterImage.js routes it via the sidecar.
+    return list.map((item) => ({
+      ...item,
+      poster: tmdb.getImageUrl(item.poster) || item.poster,
+    }));
   },
 
   // Called by librarySync once a pull has changed the local store. Re-running
