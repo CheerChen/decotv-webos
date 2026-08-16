@@ -1,0 +1,26 @@
+# decotv-tmdb-sidecar — standalone TMDB catalog sidecar for DecoTV webOS.
+#
+# Deploy on the same host as the DecoTV server (the app derives the sidecar
+# address from the server URL: same host, port 4001 — no client config).
+#
+# Usage:
+#   cp .env.example .env     # set TMDB_API_KEY
+#   docker compose up -d
+#   curl http://<host>:4001/healthz
+#
+# The image is built from this directory and pushed to a LAN registry (see
+# README "Build & push"); update `image` to your own registry if different.
+# The app expects the sidecar on port 4001. Change ports here only if you
+# also change the client's derivation (js/core/network/tmdbClient.js).
+services:
+  decotv-tmdb-sidecar:
+    image: 192.168.0.110:5000/decotv-tmdb-sidecar:latest
+    container_name: decotv-tmdb-sidecar
+    restart: unless-stopped
+    ports:
+      - '4001:4001'
+    env_file:
+      - .env
+    environment:
+      - PORT=4001
+      - TZ=Asia/Tokyo
