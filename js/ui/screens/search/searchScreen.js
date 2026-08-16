@@ -15,10 +15,11 @@ import { ScreenUtils } from "../../navigation/screen.js";
 import { Router } from "../../navigation/router.js";
 import { api } from "../../../core/network/decotvClient.js";
 import { tmdb } from "../../../core/network/tmdbClient.js";
-import { getProvider } from "../../../core/storage/catalogProvider.js";
+import { getProvider, setProvider } from "../../../core/storage/catalogProvider.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
 import { posterAttrs } from "../../posterImage.js";
 import { escapeHtml } from "../../utils.js";
+import { showToast } from "../../toast.js";
 import { TYPE_CONFIGS, WEEKDAYS, todayWeekday, bangumiToCards } from "./browseConfig.js";
 
 const PAGE_SIZE = 24;
@@ -191,7 +192,19 @@ export const SearchScreen = {
 
     // ── TMDB provider ──
     if (this.provider === "tmdb" && cfg.tmdb) {
-      return this._fetchTmdb(cfg.tmdb, fv);
+      try {
+        return await this._fetchTmdb(cfg.tmdb, fv);
+      } catch (e) {
+        // TMDB sidecar unreachable (not deployed / bad URL / key error).
+        // Auto-fallback to Douban so an upgraded client without the sidecar
+        // still browses instead of showing a dead error. One-shot: provider
+        // is now douban, so this branch won't fire again this session.
+        if (e?.name === "AbortError") throw e;
+        setProvider("douban");
+        this.provider = "douban";
+        showToast("TMDB 服务不可用，已切换回豆瓣");
+        return this._fetchCategory();
+      }
     }
 
     // ── mixed-anime (hot-anime): 全部/每日放送 → recent_hot, 国家 → recommend ──
