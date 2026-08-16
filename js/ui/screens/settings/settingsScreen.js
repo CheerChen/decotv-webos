@@ -4,6 +4,8 @@ import { ScreenUtils } from "../../navigation/screen.js";
 import { Router } from "../../navigation/router.js";
 import { AuthManager } from "../../../core/auth/authManager.js";
 import { api } from "../../../core/network/decotvClient.js";
+import { tmdb } from "../../../core/network/tmdbClient.js";
+import { getProvider, setProvider } from "../../../core/storage/catalogProvider.js";
 import { LocalLibrary } from "../../../core/storage/localLibrary.js";
 import { LibrarySync } from "../../../core/storage/librarySync.js";
 import { showToast } from "../../toast.js";
@@ -52,6 +54,9 @@ export const SettingsScreen = {
     const storageType = AuthManager.serverConfig?.StorageType || "—";
     const authMode = AuthManager.serverConfig?.AuthMode || "—";
     const clientVersion = await readClientVersion();
+    const tmdbSidecarUrl = tmdb.getStoredSidecarUrl() || "—";
+    const provider = getProvider();
+    const providerLabel = provider === "tmdb" ? t("settings.providerTmdb") : t("settings.providerDouban");
 
     // Left: focusable actions. Right: read-only client + server facts.
     this.container.innerHTML = `
@@ -69,6 +74,15 @@ export const SettingsScreen = {
                 <div class="settings-label">${t("settings.changeServer")}</div>
                 <div class="settings-value">›</div>
               </div>
+              <div class="settings-item focusable" data-action="toggle-provider">
+                <div class="settings-label">${t("settings.catalogProvider")}</div>
+                <div class="settings-value">${escapeHtml(providerLabel)}</div>
+              </div>
+              ${provider === "tmdb" ? `
+              <div class="settings-item focusable" data-action="edit-tmdb-sidecar">
+                <div class="settings-label">${t("settings.tmdbSidecar")}</div>
+                <div class="settings-value">${escapeHtml(tmdbSidecarUrl)}</div>
+              </div>` : ""}
               <div class="settings-item focusable" data-action="clear-records">
                 <div class="settings-label">${t("settings.clearRecords")}</div>
                 <div class="settings-value">›</div>
@@ -130,6 +144,18 @@ export const SettingsScreen = {
         Router.navigate("server");
         return;
       }
+      if (action === "toggle-provider") {
+        const next = getProvider() === "tmdb" ? "douban" : "tmdb";
+        setProvider(next);
+        // Re-mount so the sidecar URL row appears/disappears and the
+        // label updates.
+        Router.navigate("settings", { focusAction: "toggle-provider" });
+        return;
+      }
+      if (action === "edit-tmdb-sidecar") {
+        this._editTmdbSidecar(focused);
+        return;
+      }
       if (action === "logout") {
         await AuthManager.logout();
         return;
@@ -143,6 +169,44 @@ export const SettingsScreen = {
       }
       if (handleNavAction(action)) return;
     }
+  },
+
+  // Inline-edit the TMDB sidecar URL. Replaces the value cell with a text
+  // input; Enter saves, Back/Escape cancels and restores the display value.
+  _editTmdbSidecar(row) {
+    const valueCell = row.querySelector(".settings-value");
+    if (!valueCell) return;
+    const current = tmdb.getStoredSidecarUrl() || "";
+    valueCell.innerHTML = `<input class="form-input settings-inline-input" type="text" value="${escapeHtml(current)}" placeholder="${escapeHtml(t("settings.tmdbSidecarHint"))}" autocomplete="off" spellcheck="false" />`;
+    const input = valueCell.querySelector("input");
+    if (!input) return;
+    ScreenUtils.setFocus(input, this.container);
+    input.focus();
+    const restore = () => {
+      const saved = tmdb.getStoredSidecarUrl() || "—";
+      valueCell.textContent = saved;
+      ScreenUtils.setFocus(row, this.container);
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        let url = (input.value || "").trim();
+        if (url && !/^https?:\/\//i.test(url)) url = `http://${url}`;
+        tmdb.setSidecarUrl(url);
+        showToast(t("settings.tmdbSidecarSaved"));
+        restore();
+      } else if (e.key === "Back" || e.key === "Escape" || e.keyCode === 461) {
+        e.preventDefault();
+        restore();
+      }
+    });
+    input.addEventListener("blur", () => {
+      // Give Enter/Escape a chance to fire first; if focus left without
+      // saving, just restore the display value.
+      setTimeout(() => {
+        if (valueCell.querySelector("input")) restore();
+      }, 200);
+    });
   },
 
   cleanup() {

@@ -14,11 +14,13 @@ js/core/network/decotvClient.js
 js/core/network/lunaTransport.js
 js/core/network/preferEngine.js
 js/core/network/sourceRanking.js
+js/core/network/tmdbClient.js
 js/core/playback/adSkipDetector.js
 js/core/playback/adSkipScanner.js
 js/core/playback/outroMark.js
 js/core/playback/stallDetector.js
 js/core/playback/tsResolution.js
+js/core/storage/catalogProvider.js
 js/core/storage/detailCache.js
 js/core/storage/librarySync.js
 js/core/storage/localLibrary.js
