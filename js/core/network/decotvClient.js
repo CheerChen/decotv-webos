@@ -5,6 +5,7 @@
 // Browser/dev preview falls back to fetch().
 
 import { LocalStore } from "../storage/localStore.js";
+import { getRecommendPage as doubanRecommendDirect } from "./doubanDirect.js";
 import {
   clearLunaSession,
   getLunaSession,
@@ -188,7 +189,21 @@ export class DecoTVClient {
   }
 
   // Douban recommends API (anime 番剧/剧场版, movie/tv "全部" with multi-level filters).
+  // Direct-first: on webOS the request goes straight to Douban's rexxar API
+  // via the Luna service (doubanDirect). That path keeps the rating count
+  // per item, which lets a generic vote floor filter the concert-film noise
+  // out of the sort=S grid, and it works even when the server is slow. Any
+  // failure falls back to the server route — identical shape, no votes.
   async getDoubanRecommends(kind, opts = {}) {
+    const direct = await doubanRecommendDirect(
+      kind,
+      opts,
+      Number(opts.limit || 24)
+    );
+    if (Array.isArray(direct)) {
+      return { code: 200, message: "获取成功", list: direct };
+    }
+
     const params = new URLSearchParams({
       kind,
       limit: String(opts.limit || 24),

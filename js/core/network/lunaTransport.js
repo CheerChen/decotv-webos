@@ -181,6 +181,26 @@ export async function lunaSidecarFetchImage(baseUrl, url) {
   };
 }
 
+// Douban rexxar fetch: direct catalog JSON from m.douban.com, via the
+// service's fetchDouban method (origin-locked, Referer injected, TTL
+// cached). Takes only a relative /rexxar path — the service owns the rest.
+export async function lunaDoubanFetch(path, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 10000;
+  const result = await serviceCall("fetchDouban", {
+    path,
+    method: "GET",
+    timeoutMs
+  }, {
+    signal: options.signal,
+    timeoutMs: timeoutMs > 0 ? timeoutMs + 3000 : 63000
+  });
+
+  if (!result?.returnValue) {
+    throw new Error(result?.error || "LUNA_DOUBAN_FAILED");
+  }
+  return new LunaResponse(result);
+}
+
 export async function getLunaSession(baseUrl) {
   if (!hasLunaTransport()) return { available: false, hasSession: false };
   const result = await serviceCall("diagnostics", { baseUrl });

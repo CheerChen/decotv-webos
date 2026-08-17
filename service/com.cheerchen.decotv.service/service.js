@@ -14,6 +14,7 @@ var SessionStore = require("./sessionStore").SessionStore;
 var originOf = require("./sessionStore").originOf;
 var ImageCache = require("./imageCache").ImageCache;
 var ImagePipeline = require("./imagePipeline").ImagePipeline;
+var DoubanCache = require("./doubanCache").DoubanCache;
 
 var SERVICE_ID = "com.cheerchen.decotv.service";
 // The cookie jar lives INSIDE the service's install directory on purpose: its
@@ -159,6 +160,140 @@ function request(message) {
 }
 
 service.register("request", request);
+
+// Douban rexxar fetch: direct catalog access from m.douban.com, bypassing
+// the DecoTV server entirely. The webview cannot do this itself — the rexxar
+// API answers 400 without a Referer header, which a file:// page cannot send
+// (forbidden header). The service injects browser-looking headers and locks
+// the request to the single Douban origin + /rexxar path prefix, mirroring
+// how targetFor locks `request` to the DecoTV server's /api routes.
+// GET only: every catalog call is a plain query. Responses are cached
+// (doubanCache) — browsing revisits the same offsets constantly.
+var DOUBAN_ORIGIN = "https://m.douban.com";
+var DOUBAN_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+var doubanCache = new DoubanCache();
+var doubanAgent = new https.Agent({ keepAlive: true, maxSockets: 8 });
+
+function doubanTargetFor(payloadPath) {
+  if (typeof payloadPath !== "string" ||
+      payloadPath.charAt(0) !== "/" ||
+      payloadPath.slice(0, 2) === "//") {
+    throw new Error("A relative path is required");
+  }
+  var target = new URLCtor(payloadPath, DOUBAN_ORIGIN);
+  if (originOf(target.href) !== DOUBAN_ORIGIN ||
+      target.pathname.indexOf("/rexxar/") !== 0) {
+    throw new Error("Only Douban /rexxar paths are allowed");
+  }
+  return target;
+}
+
+function fetchDouban(message) {
+  var payload = message.payload || {};
+  var responded = false;
+
+  function respond(response) {
+    if (responded) return;
+    responded = true;
+    message.respond(response);
+  }
+
+  function failDouban(error) {
+    respond({ returnValue: false, error: String(error.message || error) });
+  }
+
+  var target;
+  try {
+    target = doubanTargetFor(payload.path);
+  } catch (error) {
+    failDouban(error);
+    return;
+  }
+
+  var method = String(payload.method || "GET").toUpperCase();
+  if (method !== "GET") {
+    failDouban(new Error("HTTP method not allowed"));
+    return;
+  }
+
+  var cacheKey = target.pathname + target.search;
+  var cached = doubanCache.get(cacheKey);
+  if (cached) {
+    respond({
+      returnValue: true,
+      status: 200,
+      contentType: "application/json",
+      body: cached,
+      cached: true
+    });
+    return;
+  }
+
+  // Verified against the live rexxar API: a plain UA is accepted as long as
+  // the Referer is a Douban page; the bid cookie is Douban's anonymous
+  // visitor id and a random one looks like a first-time visitor.
+  var headers = {
+    "Accept": "application/json, text/plain, */*",
+    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+    "Referer": "https://m.douban.com/explore",
+    "Cookie": "bid=" + Math.random().toString(36).slice(2, 13)
+  };
+
+  var req = https.request({
+    protocol: "https:",
+    hostname: target.hostname,
+    port: 443,
+    method: "GET",
+    path: target.pathname + target.search,
+    headers: headers,
+    agent: doubanAgent
+  }, function (res) {
+    var chunks = [];
+    var size = 0;
+    var finished = false;
+
+    res.on("data", function (chunk) {
+      if (finished) return;
+      size += chunk.length;
+      if (size > DOUBAN_MAX_RESPONSE_BYTES) {
+        finished = true;
+        req.destroy();
+        failDouban(new Error("Douban response exceeds 2 MiB"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    res.on("end", function () {
+      if (finished) return;
+      finished = true;
+      var body = Buffer.concat(chunks).toString("utf8");
+      var status = res.statusCode;
+      if (status === 200) {
+        doubanCache.set(cacheKey, body);
+      }
+      respond({
+        returnValue: true,
+        status: status,
+        contentType: res.headers["content-type"] || "",
+        body: body
+      });
+    });
+  });
+
+  var requestedTimeout = Number(payload.timeoutMs);
+  var timeoutMs = requestedTimeout > 0
+    ? Math.min(Math.max(requestedTimeout, 1000), 60000)
+    : 15000;
+  req.setTimeout(timeoutMs, function () {
+    req.destroy(new Error("Douban upstream timeout"));
+  });
+  req.on("error", function (error) {
+    failDouban(error);
+  });
+  req.end();
+}
+
+service.register("fetchDouban", fetchDouban);
 
 // Sidecar fetch: TMDB catalog sidecar runs on a separate origin (e.g.
 // http://pi:4001) with no auth cookie. Unlike `request`, this does not
