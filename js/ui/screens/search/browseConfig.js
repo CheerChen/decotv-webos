@@ -301,6 +301,11 @@ export const TYPE_CONFIGS = {
     tmdb: {
       endpoint: "discover",
       mediaType: "tv",
+      // Douban's 剧集 pool excludes animation (dedicated 动画 category), but
+      // TMDB discover mixes genre 16 in — American cartoons AND Japanese
+      // anime flood the list. without_genres=16 restores Douban parity; the
+      // 动漫 tab covers them with its own genrePreset.
+      excludeGenres: "16",
       filters: [
         { id: "genre", label: "类型", options: TV_GENRES, default: "" },
         { id: "region", label: "地区", options: REGIONS_FULL, default: "" },

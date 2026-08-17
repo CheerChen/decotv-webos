@@ -10,6 +10,10 @@
 //   热门电影/剧集/动漫/综艺 → recent_hot chart browsing
 //   电影/剧集/动漫/综艺     → recommend multi-filter (default sort=S, classic/high-rated)
 //   纪录片                  → mixed: default recent_hot, "精选筛选" mode → recommend
+//
+// Large result sets auto-load downward: when focus approaches the end of
+// the grid (and the set qualifies as large — see LARGE_RESULT_MIN), up to
+// MAX_AUTO_LOADS extra pages are fetched and appended in place.
 
 import { ScreenUtils } from "../../navigation/screen.js";
 import { Router } from "../../navigation/router.js";
@@ -22,7 +26,23 @@ import { escapeHtml } from "../../utils.js";
 import { showToast } from "../../toast.js";
 import { TYPE_CONFIGS, WEEKDAYS, todayWeekday, bangumiToCards } from "./browseConfig.js";
 
-const PAGE_SIZE = 24;
+// Page size for category browse. 20 on BOTH providers: TMDB v3 hard-caps
+// every page at 20, so Douban matches it to keep provider behaviour
+// identical (same page math, same short-page "end of data" signal).
+// With auto-load-down this yields up to 20x5 = 100 items per category.
+const PAGE_SIZE = 20;
+
+// Auto-load-down for large category result sets.
+// "Large": TMDB responses carry `total` — a result set of >= 100 items with
+// more pages left qualifies. Douban responses carry no total, so a completely
+// full first page (20/20) is the practical signal — narrow filters (e.g.
+// 2026 + 日本) come back short and never qualify.
+// When qualified, scrolling focus into the last ~2 rows fetches the next
+// page, up to MAX_AUTO_LOADS times (20x5 = 100 items on either provider).
+// A short page or a failed fetch ends the chain early.
+const LARGE_RESULT_MIN = 100;
+const MAX_AUTO_LOADS = 4;
+const AUTO_LOAD_TRIGGER_LEFT = 16; // ~2 grid rows on a 1920px screen
 
 // In-memory snapshots keyed by tab type. Only needed across one Back
 // navigation (detail → search), so a module-level Map is enough — no
@@ -40,6 +60,14 @@ export const SearchScreen = {
   filterValues: {},
   selectedWeekday: null,
   abortCtrl: null,
+  // Auto-load-down state (see constants above). loadToken guards against
+  // a category change racing an in-flight auto-load append.
+  autoLoads: 0,
+  autoLoadTotal: null,
+  autoLoadDone: false,
+  autoLoading: false,
+  tmdbNextPage: 1,
+  loadToken: 0,
 
   async mount(params = {}, opts = {}) {
     this.container = document.getElementById("search");
@@ -61,6 +89,18 @@ export const SearchScreen = {
       this.filterValues = { ...snapshot.filterValues };
       this.selectedWeekday = snapshot.selectedWeekday;
       this.abortCtrl = null;
+      // Auto-load bookkeeping: pages already loaded are implied by the list
+      // length; total is unknown after restore so Douban-style eligibility
+      // (list >= PAGE_SIZE) applies until the next full reload.
+      this.autoLoads = Math.min(
+        MAX_AUTO_LOADS,
+        Math.ceil(Math.max(0, this.results.length - PAGE_SIZE) / PAGE_SIZE)
+      );
+      this.autoLoadTotal = null;
+      this.autoLoadDone = this.autoLoads >= MAX_AUTO_LOADS;
+      this.autoLoading = false;
+      this.tmdbNextPage = 1;
+      this.loadToken += 1;
       const activeTab = `nav-${this.type}`;
       this.container.innerHTML = `
         ${renderNavHeader(activeTab)}
@@ -171,6 +211,11 @@ export const SearchScreen = {
   async _loadCategory() {
     if (this.abortCtrl) this.abortCtrl.abort();
     this.abortCtrl = new AbortController();
+    this.loadToken += 1;
+    this.autoLoads = 0;
+    this.autoLoadTotal = null;
+    this.autoLoadDone = false;
+    this.autoLoading = false;
     this.loading = true;
     const body = this.container.querySelector("#searchBody");
     body.innerHTML = `<div class="center-wrap"><div class="loading-spinner"></div></div>`;
@@ -185,15 +230,80 @@ export const SearchScreen = {
     }
   },
 
+  // ── Auto-load-down ────────────────────────────────────────────────────────
+
+  _autoLoadEligible() {
+    if (this.autoLoadDone || this.autoLoads >= MAX_AUTO_LOADS) return false;
+    if (this.provider === "tmdb" && this.autoLoadTotal != null) {
+      return this.autoLoadTotal >= LARGE_RESULT_MIN
+        && this.results.length < this.autoLoadTotal;
+    }
+    // Douban (or restored snapshot): a full page means there is very likely
+    // more behind it — try one load and let a short page end the chain.
+    return this.results.length >= PAGE_SIZE;
+  },
+
+  // Fire-and-forget trigger, called on focus moves inside the result grid.
+  _maybeAutoLoad(focused) {
+    const card = focused?.closest?.(".poster-card");
+    if (!card) return;
+    const idx = Number(card.dataset.index || 0);
+    if (idx < this.results.length - AUTO_LOAD_TRIGGER_LEFT) return;
+    if (!this._autoLoadEligible() || this.autoLoading || this.loading) return;
+    this._autoLoadMore();
+  },
+
+  async _autoLoadMore() {
+    const token = this.loadToken;
+    this.autoLoading = true;
+    const start = this.results.length;
+    const page = this.tmdbNextPage > 1 ? this.tmdbNextPage : Math.floor(start / PAGE_SIZE) + 2;
+    try {
+      const more = await this._fetchCategory({ start, page });
+      if (token !== this.loadToken) return; // category changed mid-flight
+      if (!Array.isArray(more) || !more.length) {
+        this.autoLoadDone = true;
+        return;
+      }
+      this.results = this.results.concat(more);
+      this.autoLoads += 1;
+      if (more.length < PAGE_SIZE) this.autoLoadDone = true; // end of data
+      if (this.autoLoadTotal != null && this.results.length >= this.autoLoadTotal) {
+        this.autoLoadDone = true;
+      }
+      this._appendCards(more, start);
+    } catch (e) {
+      if (e?.name === "AbortError") return;
+      this.autoLoadDone = true; // network hiccup — stop the chain, keep what we have
+    } finally {
+      if (token === this.loadToken) this.autoLoading = false;
+    }
+  },
+
+  // Append new cards without rebuilding the grid — keeps scroll position,
+  // focus node and already-loaded poster images untouched.
+  _appendCards(items, from) {
+    const grid = this.container.querySelector(".poster-grid");
+    if (!grid) return;
+    grid.insertAdjacentHTML("beforeend", items.map((r, j) => this._cardHtml(r, from + j)).join(""));
+    ScreenUtils.indexFocusables(grid);
+  },
+
   // Dispatch to the correct API based on provider + endpoint type + filter values.
-  async _fetchCategory() {
+  // `paging`: { start } for Douban offset APIs, { page } for TMDB pages.
+  async _fetchCategory(paging = {}) {
+    const start = paging.start || 0;
+    const page = paging.page || 1;
     const cfg = TYPE_CONFIGS[this.type];
     const fv = this.filterValues;
 
     // ── TMDB provider ──
     if (this.provider === "tmdb" && cfg.tmdb) {
       try {
-        return await this._fetchTmdb(cfg.tmdb, fv);
+        const list = await this._fetchTmdb(cfg.tmdb, fv, page);
+        this.tmdbNextPage = page + 1;
+        this.autoLoadTotal = Number.isFinite(this._tmdbTotal) ? this._tmdbTotal : null;
+        return list;
       } catch (e) {
         // TMDB sidecar unreachable (not deployed / bad URL / key error).
         // Auto-fallback to Douban so an upgraded client without the sidecar
@@ -203,7 +313,7 @@ export const SearchScreen = {
         setProvider("douban");
         this.provider = "douban";
         showToast("TMDB 服务不可用，已切换回豆瓣");
-        return this._fetchCategory();
+        return this._fetchCategory(paging);
       }
     }
 
@@ -217,12 +327,12 @@ export const SearchScreen = {
       }
       // "全部" → recent_hot anime chart.
       if (t === "tv_animation") {
-        const data = await api.getDoubanCategories("tv", "tv", "tv_animation", PAGE_SIZE, 0);
+        const data = await api.getDoubanCategories("tv", "tv", "tv_animation", PAGE_SIZE, start);
         return Array.isArray(data?.list) ? data.list : [];
       }
       // Country filter (华语/日本/欧美) → recommend category=动画, sort=U (近期热度).
       const data = await api.getDoubanRecommends("tv", {
-        category: "动画", format: "电视剧", region: t, sort: "U", limit: PAGE_SIZE,
+        category: "动画", format: "电视剧", region: t, sort: "U", limit: PAGE_SIZE, start,
       });
       return Array.isArray(data?.list) ? data.list : [];
     }
@@ -237,7 +347,7 @@ export const SearchScreen = {
       const kind = cfg.rhKind;
       const category = cfg.rhCategory || fv.category;
       const type = fv.type;
-      const data = await api.getDoubanCategories(kind, category, type, PAGE_SIZE, 0);
+      const data = await api.getDoubanCategories(kind, category, type, PAGE_SIZE, start);
       return Array.isArray(data?.list) ? data.list : [];
     }
 
@@ -250,6 +360,7 @@ export const SearchScreen = {
         year: fv.year || "",
         sort: fv.sort || "",
         limit: PAGE_SIZE,
+        start,
       });
       return Array.isArray(data?.list) ? data.list : [];
     }
@@ -257,7 +368,7 @@ export const SearchScreen = {
     // ── mixed (documentary) ──
     if (cfg.endpoint === "mixed") {
       if (fv.mode === "hot") {
-        const data = await api.getDoubanCategories("tv", "tv", "tv_documentary", PAGE_SIZE, 0);
+        const data = await api.getDoubanCategories("tv", "tv", "tv_documentary", PAGE_SIZE, start);
         return Array.isArray(data?.list) ? data.list : [];
       }
       // curated → recommend
@@ -267,6 +378,7 @@ export const SearchScreen = {
         year: fv.year || "",
         sort: fv.sort || "",
         limit: PAGE_SIZE,
+        start,
       });
       return Array.isArray(data?.list) ? data.list : [];
     }
@@ -276,11 +388,11 @@ export const SearchScreen = {
 
   // TMDB provider: route to sidecar chart or discover endpoint.
   // `tcfg` is the cfg.tmdb block (endpoint, mediaType, genrePreset, ...).
-  async _fetchTmdb(tcfg, fv) {
+  async _fetchTmdb(tcfg, fv, page) {
     const mediaType = tcfg.mediaType || "movie";
     if (tcfg.endpoint === "chart") {
       const chart = fv.chart || "hot";
-      const data = await tmdb.getChart(mediaType, chart, 1);
+      const data = await tmdb.getChart(mediaType, chart, page);
       return this._normalizeTmdbList(data);
     }
     if (tcfg.endpoint === "discover") {
@@ -300,7 +412,9 @@ export const SearchScreen = {
         language,
         year: fv.year || "",
         sort,
-        page: 1,
+        page,
+        // 剧集 tab excludes animation (genre 16) — see browseConfig.
+        exclude_genres: tcfg.excludeGenres || "",
         // 综艺/纪录片 collapse franchise repeats (Paradise Hotel x3).
         dedupe: tcfg.dedupe ? "1" : "",
       });
@@ -311,13 +425,32 @@ export const SearchScreen = {
 
   // TMDB sidecar returns {list:[{id,title,poster,rate,year}]} where poster
   // is a full image.tmdb.org URL. Wrap it through the sidecar image proxy
-  // so posterImage.js routes it via lunaSidecarFetchImage.
+  // so posterImage.js routes it via lunaSidecarFetchImage. Also captures
+  // `total` for the auto-load eligibility check.
   _normalizeTmdbList(data) {
     const list = Array.isArray(data?.list) ? data.list : [];
+    this._tmdbTotal = Number.isFinite(data?.total) ? data.total : null;
     return list.map((item) => ({
       ...item,
       poster: tmdb.getImageUrl(item.poster) || item.poster,
     }));
+  },
+
+  _cardHtml(r, i) {
+    const poster = posterAttrs(r.poster);
+    const title = escapeHtml(r.title || r.name_cn || r.name || "");
+    const year = escapeHtml(r.year || "");
+    const rate = r.rate ? `<span class="rate-badge">★ ${escapeHtml(r.rate)}</span>` : "";
+    const sub = `${rate}${year ? `<span>${year}</span>` : ""}`;
+    return `
+      <div class="poster-card focusable" data-action="open-douban" data-index="${i}">
+        <img class="poster-img" ${poster} alt="" loading="lazy" onerror="this.style.opacity=0.1" />
+        <div class="poster-meta">
+          <div class="poster-title">${title}</div>
+          <div class="poster-sub">${sub}</div>
+        </div>
+      </div>
+    `;
   },
 
   _renderResults() {
@@ -334,22 +467,7 @@ export const SearchScreen = {
       }
       return;
     }
-    const cards = this.results.slice(0, 120).map((r, i) => {
-      const poster = posterAttrs(r.poster);
-      const title = escapeHtml(r.title || r.name_cn || r.name || "");
-      const year = escapeHtml(r.year || "");
-      const rate = r.rate ? `<span class="rate-badge">★ ${escapeHtml(r.rate)}</span>` : "";
-      const sub = `${rate}${year ? `<span>${year}</span>` : ""}`;
-      return `
-        <div class="poster-card focusable" data-action="open-douban" data-index="${i}">
-          <img class="poster-img" ${poster} alt="" loading="lazy" onerror="this.style.opacity=0.1" />
-          <div class="poster-meta">
-            <div class="poster-title">${title}</div>
-            <div class="poster-sub">${sub}</div>
-          </div>
-        </div>
-      `;
-    }).join("");
+    const cards = this.results.slice(0, 120).map((r, i) => this._cardHtml(r, i)).join("");
     const cfg = TYPE_CONFIGS[this.type];
     const heading = `${cfg.label} · ${escapeHtml(this._currentTagLabel())}`;
     body.innerHTML = `<div class="section-title">${heading}</div><div class="poster-grid">${cards}</div>`;
@@ -390,7 +508,12 @@ export const SearchScreen = {
     const code = Number(event.keyCode || 0);
     const focused = this.container.querySelector(".focused");
 
-    if (ScreenUtils.handleDpadNavigation(event, this.container)) return;
+    if (ScreenUtils.handleDpadNavigation(event, this.container)) {
+      // Focus moved — the auto-load-down trigger rides along so no extra
+      // key handling is needed to grow large result sets.
+      this._maybeAutoLoad(this.container.querySelector(".focused"));
+      return;
+    }
 
     if (code === 13) {
       if (!focused) return;
