@@ -1,11 +1,11 @@
 // adSkipScanner.js — pre-scan an HLS playlist for mid-roll ad ranges.
 //
 // For each #EXT-X-DISCONTINUITY group, fetch the first media segment and read
-// coded resolution from the H.264 SPS. The majority resolution by duration is
-// treated as the feature; groups whose coded dimensions differ — smaller OR
-// larger — become skippable ranges (strict equality, verified against several
-// resource-site families: content segments are resolution-uniform, every
-// deviating block measured was an ad).
+// coded resolution + level_idc from the H.264 SPS. The majority signature by
+// duration is treated as the feature; groups whose coded parameters differ —
+// resolution (smaller OR larger) or level_idc — become skippable ranges
+// (strict equality, verified against several resource-site families: content
+// segments are encoder-uniform, every deviating block measured was an ad).
 //
 // Secondary feature: the group's segment URL signature (host + directory).
 // Injected ad assets live in a different storage path than the episode's own
@@ -193,7 +193,7 @@ async function mapPool(items, concurrency, fn, signal) {
  * @param {{ signal?: AbortSignal, concurrency?: number }} [opts]
  * @returns {Promise<{
  *   ranges: { start: number, end: number }[],
- *   baseline: { w: number, h: number } | null,
+ *   baseline: { w: number, h: number, level: number } | null,
  *   groups: number,
  *   probed: number,
  *   sigAdGroups: number,
@@ -263,20 +263,30 @@ export async function scanAdRanges(playUrl, opts = {}) {
     async (g) => {
       try {
         const dims = await probeSegmentResolution(g.firstUrl, signal);
-        return { ...g, w: dims?.w || 0, h: dims?.h || 0, ok: Boolean(dims?.w) };
+        return {
+          ...g,
+          w: dims?.w || 0,
+          h: dims?.h || 0,
+          level: dims?.level || 0,
+          ok: Boolean(dims?.w)
+        };
       } catch (_) {
-        return { ...g, w: 0, h: 0, ok: false };
+        return { ...g, w: 0, h: 0, level: 0, ok: false };
       }
     },
     signal
   );
 
-  // Majority resolution weighted by group duration.
-  const areaKey = (w, h) => `${w}x${h}`;
+  // Majority coded-parameter signature (resolution + level_idc) weighted by
+  // group duration. level_idc catches ads re-encoded to the SAME resolution
+  // as the content and hosted in the same directory (dytt mixed.m3u8 family:
+  // ad 1920x1080@level50 vs content 1920x1080@level40) — the encoder that
+  // restreams the ad almost never lands on the identical level.
+  const areaKey = (w, h, level) => `${w}x${h}@${level}`;
   const scores = new Map();
   for (const g of probes) {
     if (!g.ok) continue;
-    const k = areaKey(g.w, g.h);
+    const k = areaKey(g.w, g.h, g.level);
     scores.set(k, (scores.get(k) || 0) + g.duration);
   }
   let baseline = null;
@@ -284,8 +294,8 @@ export async function scanAdRanges(playUrl, opts = {}) {
   for (const [k, score] of scores) {
     if (score > bestScore) {
       bestScore = score;
-      const [w, h] = k.split("x").map(Number);
-      baseline = { w, h };
+      const m = k.match(/^(\d+)x(\d+)@(\d+)$/);
+      baseline = { w: Number(m[1]), h: Number(m[2]), level: Number(m[3]) };
     }
   }
 
@@ -313,10 +323,13 @@ export async function scanAdRanges(playUrl, opts = {}) {
 
   const adGroups = [];
   for (const g of probes) {
-    // Strict coded-resolution rule: any deviation (smaller or larger) from the
-    // duration-weighted baseline is ad material. Probe-failed groups (ok=false)
-    // never flag on resolution, so a partial 512KB probe cannot misclassify.
-    const resAd = g.ok && baseline && isAdResolution(g.w, g.h, baseline.w, baseline.h);
+    // Strict coded-signature rule: any deviation in resolution OR level_idc
+    // from the duration-weighted baseline is ad material. Probe-failed groups
+    // (ok=false) never flag, so a partial 512KB probe cannot misclassify.
+    const resAd = g.ok && baseline && (
+      isAdResolution(g.w, g.h, baseline.w, baseline.h)
+      || g.level !== baseline.level
+    );
     const sigAd = sigUsable && g.sig != null && g.sig !== baselineSig;
     if (resAd || sigAd) adGroups.push(g);
   }

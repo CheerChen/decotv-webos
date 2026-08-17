@@ -22,6 +22,7 @@ describe("resolutionFromTsBuffer", () => {
     assert.ok(dims);
     assert.equal(dims.w, 1920);
     assert.equal(dims.h, 1080);
+    assert.ok(Number.isInteger(dims.level) && dims.level > 0);
   });
 
   it("reads 848x640 from a known ad segment when present", () => {
@@ -30,5 +31,21 @@ describe("resolutionFromTsBuffer", () => {
     assert.ok(dims);
     assert.equal(dims.w, 848);
     assert.equal(dims.h, 640);
+    assert.ok(Number.isInteger(dims.level) && dims.level > 0);
+  });
+
+  // dytt mixed.m3u8 case: ad re-encoded to the same 1920x1080 as content —
+  // only level_idc separates them (ad @50, content @40).
+  const dyttAd = "/tmp/dytt_ad.ts";
+  const dyttContent = "/tmp/dytt_content.ts";
+
+  it("distinguishes same-resolution dytt ad via level_idc when present", () => {
+    if (!existsSync(dyttAd) || !existsSync(dyttContent)) return;
+    const adDims = resolutionFromTsBuffer(readFileSync(dyttAd));
+    const ctDims = resolutionFromTsBuffer(readFileSync(dyttContent));
+    assert.ok(adDims && ctDims);
+    assert.equal(adDims.w, ctDims.w);
+    assert.equal(adDims.h, ctDims.h);
+    assert.notEqual(adDims.level, ctDims.level);
   });
 });

@@ -65,7 +65,7 @@ function parseSpsDimensions(spsNal) {
   const r = new BitReader(rbsp);
   const profileIdc = r.readBits(8);
   r.readBits(8); // constraint flags
-  r.readBits(8); // level_idc
+  const levelIdc = r.readBits(8);
   expGolomb(r); // seq_parameter_set_id
 
   let chromaFormatIdc = 1;
@@ -135,7 +135,7 @@ function parseSpsDimensions(spsNal) {
     - (frameCropTop + frameCropBottom) * 2 * (2 - frameMbsOnlyFlag);
 
   if (width < 16 || height < 16 || width > 7680 || height > 4320) return null;
-  return { w: width, h: height };
+  return { w: width, h: height, level: levelIdc };
 }
 
 function findNalUnits(payload) {
@@ -215,7 +215,7 @@ function annexBFromTs(buffer) {
 
 /**
  * @param {ArrayBuffer|Uint8Array} buffer MPEG-TS (or Annex-B) bytes
- * @returns {{ w: number, h: number } | null}
+ * @returns {{ w: number, h: number, level: number } | null}
  */
 export function resolutionFromTsBuffer(buffer) {
   try {
