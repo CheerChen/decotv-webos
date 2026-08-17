@@ -79,6 +79,8 @@ export const DetailScreen = {
     this.episodeIndex = 0;
     this._relatedResults = [];
     this._relatedKeyword = "";
+    this._lastSearchKeyword = ""; // shared raw search response for related badges
+    this._lastSearchData = null;
     // On a Back navigation we must NOT auto-play again (that is what made Back
     // "reset" playback — it re-launched the player from episode 0 at 0:00).
     const fromHistory = Boolean(opts?.fromHistory);
@@ -109,6 +111,7 @@ export const DetailScreen = {
       // Already have a source; optionally fetch detail for richer metadata.
       this._renderHeroMeta();
       this._maybeFetchDetail();
+      this._fetchRelatedTitles();
       if (this.autoPlay) {
         await this._startPlayback(this.currentSource, 0, { preferResume: true });
       } else {
@@ -170,6 +173,8 @@ export const DetailScreen = {
     if (this.sources.some((s) => !this.probeResults.has(getSourceProbeKey(s)))) {
       this._probeAndPick({ reselect: false });
     }
+    // Related badges ride the cached sources, not a fresh search.
+    this._fetchRelatedTitles();
   },
 
   _renderSkeleton() {
@@ -333,8 +338,6 @@ export const DetailScreen = {
       cast.innerHTML = lines.join("<br>");
       cast.style.display = lines.length ? "" : "none";
     }
-
-    this._maybeFetchRelatedTitles();
   },
 
   // Related-series badges: take the first space-separated segment of the
@@ -347,14 +350,11 @@ export const DetailScreen = {
   _relatedResults: [],
   _relatedKeyword: "",   // dedup guard: keyword already searched this mount
 
-  // In prefer mode the related-titles search is deferred until probe finishes
-  // (onDone) to avoid competing with the 8-way probe burst for server time.
-  // In single mode it fires immediately — only 1 search + 1 detail request.
-  _maybeFetchRelatedTitles() {
-    if (this.mode === "prefer" && this.probeRunning) return;
-    this._fetchRelatedTitles();
-  },
-
+  // Driven explicitly from the four lifecycle sites that know whether a main
+  // /api/search is coming (see _searchAndShare, single-source enter, restore
+  // from cache, and probe continuation). It must NOT hang off _renderHeroMeta:
+  // the first hero render fires before the prefer engine dispatches its search,
+  // which used to cause a second identical request for bare titles.
   _fetchRelatedTitles() {
     const wrap = this.container?.querySelector("#detailRelated");
     const badgesEl = this.container?.querySelector("#detailRelatedBadges");
@@ -370,9 +370,8 @@ export const DetailScreen = {
     const keyword = (sp > 0 ? fullTitle.slice(0, sp) : fullTitle).trim();
     if (!keyword) { wrap.style.display = "none"; return; }
 
-    // Dedup within a single mount: _renderHeroMeta fires multiple times during
-    // the prefer flow (null → first hit → best). The keyword is the same each
-    // time, so skip once we have already dispatched a fetch for it.
+    // Dedup within a single mount: several lifecycle sites may reach this,
+    // so the keyword is only dispatched once per mount.
     if (this._relatedKeyword === keyword) return;
     this._relatedKeyword = keyword;
 
@@ -381,6 +380,16 @@ export const DetailScreen = {
     const cached = getCachedRelated(keyword);
     if (cached) {
       this._renderRelatedBadges(cached, fullTitle, wrap, badgesEl);
+      return;
+    }
+
+    // Bare titles have no space-separated segment, so the main source search
+    // used the same keyword this mount — reuse its raw response instead of
+    // issuing a second identical /api/search.
+    if (this._lastSearchKeyword === keyword && this._lastSearchData) {
+      const related = this._filterRelatedResults(this._lastSearchData, keyword, fullTitle);
+      setCachedRelated(keyword, related);
+      this._renderRelatedBadges(related, fullTitle, wrap, badgesEl);
       return;
     }
 
@@ -456,6 +465,25 @@ export const DetailScreen = {
       initialSources: this.sources,
       existingProbeResults: this.probeResults,
     });
+    // Probe-continuation mounts have no fresh source search; the related
+    // badges render from their own cache (or a single request if uncached).
+    this._fetchRelatedTitles();
+  },
+
+  // Fetch the raw /api/search response AND keep a copy for the related-series
+  // badges. One search must serve both consumers when the keywords match, so
+  // bare titles do not fire two identical requests per detail page.
+  _searchAndShare(title) {
+    this._lastSearchKeyword = title;
+    return api.searchVideos(title).then((data) => {
+      this._lastSearchData = data;
+      // Main search response now serves both consumers when the related
+      // keyword matches (bare titles) — render the badges from it without a
+      // second request. Dedup guard inside _fetchRelatedTitles makes repeated
+      // calls from other lifecycle sites a no-op.
+      this._fetchRelatedTitles();
+      return data;
+    });
   },
 
   async _runPreferEngine({
@@ -472,7 +500,7 @@ export const DetailScreen = {
       reselect,
       initialSources,
       existingProbeResults,
-      searchVideos: (title) => api.searchVideos(title),
+      searchVideos: (title) => this._searchAndShare(title),
       probePlayback: (...args) => api.probePlayback(...args),
       isStale: () => epoch !== this._mountEpoch,
       canAutoPlay: () => !this.preferCancelled,
