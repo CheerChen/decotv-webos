@@ -8,8 +8,6 @@
 // detector on videoWidth/videoHeight so sources that change resolution at the
 // decoder still get some skip behaviour.
 
-export const AREA_RATIO_MAX = 0.55;
-export const DIM_RATIO_MAX = 0.80;
 export const BASELINE_STABLE_SAMPLES = 4;
 export const MIN_BASELINE_TIME_S = 3;
 export const SKIP_STEP_S = 6;
@@ -46,14 +44,19 @@ function area(w, h) {
   return w * h;
 }
 
+// Strict coded-resolution rule. Empirically verified across 7 real sources
+// (zuidazym3u8 / modujx / ryplay / bfikuncdn / kkzycdn families): content
+// segments of one episode share the exact same SPS coded dimensions, and every
+// observed deviation — smaller (848x640 inside 1920x804), near-same-size
+// (1920x1080 16:9 gambling overlay inside 2542x1080 2.35:1 content) or larger
+// (1920x1080 injected into 1280x720 rips) — was ad material (12/12 visual
+// verification, zero false positives). The old "area shrunk below 55%"
+// heuristic missed exactly those patterns, so ANY resolution difference from
+// the duration-weighted baseline now counts as an ad (probe-idempotent: the
+// scan skips probe-failed groups before consulting this).
 export function isAdResolution(w, h, baselineW, baselineH) {
   if (!w || !h || !baselineW || !baselineH) return false;
-  const baseArea = area(baselineW, baselineH);
-  const curArea = area(w, h);
-  if (curArea >= baseArea * 0.95) return false;
-  if (curArea / baseArea > AREA_RATIO_MAX) return false;
-  if (w > baselineW * DIM_RATIO_MAX || h > baselineH * DIM_RATIO_MAX) return false;
-  return true;
+  return w !== baselineW || h !== baselineH;
 }
 
 /** Apply a completed scan result onto detector state. */

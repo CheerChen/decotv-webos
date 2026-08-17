@@ -2,7 +2,10 @@
 //
 // For each #EXT-X-DISCONTINUITY group, fetch the first media segment and read
 // coded resolution from the H.264 SPS. The majority resolution by duration is
-// treated as the feature; clearly smaller groups become skippable ranges.
+// treated as the feature; groups whose coded dimensions differ — smaller OR
+// larger — become skippable ranges (strict equality, verified against several
+// resource-site families: content segments are resolution-uniform, every
+// deviating block measured was an ad).
 //
 // Secondary feature: the group's segment URL signature (host + directory).
 // Injected ad assets live in a different storage path than the episode's own
@@ -25,6 +28,10 @@ export const PLAYLIST_TIMEOUT_MS = 12000;
 // share of the total duration — otherwise a playlist that legitimately rotates
 // CDN hosts group-by-group would classify content groups as ads.
 export const SIG_MAJORITY_MIN = 0.5;
+// A flagged block shorter than this is treated as encoder noise; only merged
+// ranges of at least this length warrant a seek. Real ad blocks measured
+// 20-88s across sources, while stray single-segment anomalies run 1-2s.
+export const MIN_AD_RANGE_S = 5;
 
 /**
  * @param {string} url
@@ -306,6 +313,9 @@ export async function scanAdRanges(playUrl, opts = {}) {
 
   const adGroups = [];
   for (const g of probes) {
+    // Strict coded-resolution rule: any deviation (smaller or larger) from the
+    // duration-weighted baseline is ad material. Probe-failed groups (ok=false)
+    // never flag on resolution, so a partial 512KB probe cannot misclassify.
     const resAd = g.ok && baseline && isAdResolution(g.w, g.h, baseline.w, baseline.h);
     const sigAd = sigUsable && g.sig != null && g.sig !== baselineSig;
     if (resAd || sigAd) adGroups.push(g);
@@ -323,7 +333,7 @@ export async function scanAdRanges(playUrl, opts = {}) {
   }
 
   return {
-    ranges,
+    ranges: ranges.filter((r) => r.end - r.start >= MIN_AD_RANGE_S),
     baseline,
     groups: groups.length,
     probed: probes.filter((p) => p.ok).length,

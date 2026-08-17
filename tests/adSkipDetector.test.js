@@ -20,6 +20,41 @@ import {
   urlSignature
 } from "../js/core/playback/adSkipScanner.js";
 
+// Real H.264 SPS snippets (start code + NAL), verified to parse via
+// resolutionFromTsBuffer: 1920x1080 ad material, 1280x720 content, and
+// 2542x1080 letterboxed 2.35:1 content (zuidazym3u8 family).
+const SPS_1080P = new Uint8Array([
+  0x00, 0x00, 0x00, 0x01,
+  0x67, 0x64, 0x00, 0x28, 0xac, 0xd9, 0x40, 0x78, 0x02, 0x27, 0xe5,
+  0xc0, 0x5a, 0x80, 0x80, 0x80, 0xa0, 0x00, 0x00, 0x03, 0x00, 0x20,
+  0x00, 0x00, 0x06, 0x41, 0xe3, 0x06, 0x32, 0xc0
+]);
+const SPS_720P = new Uint8Array([
+  0x00, 0x00, 0x00, 0x01, 0x67, 0x64, 0x00, 0x1f, 0xac, 0xd9, 0x40, 0x50,
+  0x05, 0xbb, 0x01, 0x6a, 0x02, 0x02, 0x02, 0x80, 0x00, 0x00, 0x03, 0x00,
+  0x80, 0x00, 0x00, 0x19, 0x07, 0x8c, 0x18, 0xcb
+]);
+const SPS_2542X1080 = new Uint8Array([
+  0x00, 0x00, 0x00, 0x01, 0x67, 0x64, 0x00, 0x32, 0xac, 0xd9, 0x40, 0x27,
+  0xc0, 0x89, 0xea, 0x5c, 0x05, 0xa8, 0x48, 0x80, 0x4a, 0x00, 0x00, 0x03,
+  0x00, 0x02, 0x00, 0x00, 0x03, 0x00, 0x64, 0x1e, 0x30, 0x63, 0x2c
+]);
+
+function stubFetch(playlistText, resolveBody) {
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const s = String(url);
+    if (/\.m3u8/.test(s)) {
+      return new Response(playlistText, { status: 200 });
+    }
+    const body = typeof resolveBody === "function" ? resolveBody(s) : resolveBody;
+    return new Response(body, { status: 200 });
+  };
+  return () => {
+    globalThis.fetch = original;
+  };
+}
+
 function sample(partial) {
   return {
     w: 1920,
@@ -35,11 +70,20 @@ function sample(partial) {
 }
 
 describe("isAdResolution", () => {
-  it("flags 848x640 against 1080p", () => {
+  it("flags smaller resolution (848x640 against 1080p)", () => {
     assert.equal(isAdResolution(848, 640, 1920, 1080), true);
+  });
+  it("flags larger resolution (1080p ad injected into 720p rip)", () => {
+    assert.equal(isAdResolution(1920, 1080, 1280, 720), true);
+  });
+  it("flags 16:9 1080p block against 2.35:1 2542x1080 content", () => {
+    assert.equal(isAdResolution(1920, 1080, 2542, 1080), true);
   });
   it("does not flag same resolution", () => {
     assert.equal(isAdResolution(1920, 1080, 1920, 1080), false);
+  });
+  it("does not flag when baseline is empty", () => {
+    assert.equal(isAdResolution(1920, 1080, 0, 0), false);
   });
 });
 
@@ -174,29 +218,6 @@ describe("parseMediaGroups", () => {
 });
 
 describe("scanAdRanges URL-signature feature", () => {
-  // Real H.264 SPS extracted from an ad segment that encodes at 1920x1080
-  // (High profile, level 4.0). Verified to parse via resolutionFromTsBuffer.
-  const SPS_1080P = new Uint8Array([
-    0x00, 0x00, 0x00, 0x01,
-    0x67, 0x64, 0x00, 0x28, 0xac, 0xd9, 0x40, 0x78, 0x02, 0x27, 0xe5,
-    0xc0, 0x5a, 0x80, 0x80, 0x80, 0xa0, 0x00, 0x00, 0x03, 0x00, 0x20,
-    0x00, 0x00, 0x06, 0x41, 0xe3, 0x06, 0x32, 0xc0
-  ]);
-
-  function stubFetch(playlistText, segmentBody) {
-    const original = globalThis.fetch;
-    globalThis.fetch = async (url) => {
-      const s = String(url);
-      if (/\.m3u8/.test(s)) {
-        return new Response(playlistText, { status: 200 });
-      }
-      return new Response(segmentBody, { status: 200 });
-    };
-    return () => {
-      globalThis.fetch = original;
-    };
-  }
-
   const playlist = [
     "#EXTM3U",
     "#EXTINF:4.0,",
@@ -208,6 +229,8 @@ describe("scanAdRanges URL-signature feature", () => {
     "https://cdn.example/20260727/creative/10M/hls/a1.ts",
     "#EXTINF:2.0,",
     "https://cdn.example/20260727/creative/10M/hls/a2.ts",
+    "#EXTINF:2.0,",
+    "https://cdn.example/20260727/creative/10M/hls/a3.ts",
     "#EXT-X-DISCONTINUITY",
     "#EXTINF:4.0,",
     "https://cdn.example/2025/1107/4M/hls/s3.ts",
@@ -219,10 +242,11 @@ describe("scanAdRanges URL-signature feature", () => {
     try {
       const result = await scanAdRanges("https://cdn.example/index.m3u8");
       // Both content and ad probe as 1920x1080 — resolution alone would find
-      // nothing; the URL signature must carry the classification.
+      // nothing; the URL signature must carry the classification. Ad block is
+      // 3x2s = 6s and survives the MIN_AD_RANGE_S=5 floor.
       assert.equal(result.baseline.w, 1920);
       assert.equal(result.baseline.h, 1080);
-      assert.deepEqual(result.ranges, [{ start: 8, end: 12 }]);
+      assert.deepEqual(result.ranges, [{ start: 8, end: 14 }]);
       assert.equal(result.sigAdGroups, 1);
     } finally {
       restore();
@@ -235,7 +259,7 @@ describe("scanAdRanges URL-signature feature", () => {
       const result = await scanAdRanges("https://cdn.example/index.m3u8");
       assert.equal(result.probed, 0);
       assert.equal(result.baseline, null);
-      assert.deepEqual(result.ranges, [{ start: 8, end: 12 }]);
+      assert.deepEqual(result.ranges, [{ start: 8, end: 14 }]);
       assert.equal(result.sigAdGroups, 1);
     } finally {
       restore();
@@ -266,5 +290,90 @@ describe("scanAdRanges URL-signature feature", () => {
       "https://cdn.example/2025/1107/4M/hls/"
     );
     assert.equal(urlSignature("not a url"), null);
+  });
+});
+
+describe("scanAdRanges strict coded-resolution rule", () => {
+  const sameDirPlaylist = (adCount) => [
+    "#EXTM3U",
+    "#EXTINF:4.0,",
+    "https://cdn.example/ep/hls/s1.ts",
+    "#EXTINF:4.0,",
+    "https://cdn.example/ep/hls/s2.ts",
+    "#EXT-X-DISCONTINUITY",
+    ...Array.from({ length: adCount }, (_, i) => [
+      "#EXTINF:2.0,",
+      `https://cdn.example/ep/hls/ad${i + 1}.ts`
+    ]).flat(),
+    "#EXT-X-DISCONTINUITY",
+    "#EXTINF:4.0,",
+    "https://cdn.example/ep/hls/s3.ts",
+    "#EXT-X-ENDLIST"
+  ].join("\n");
+
+  it("flags a same-directory higher-resolution injection as an ad", async () => {
+    const restore = stubFetch(sameDirPlaylist(3), (url) =>
+      /ad\d\.ts/.test(url) ? SPS_1080P : SPS_720P);
+    try {
+      const result = await scanAdRanges("https://cdn.example/index.m3u8");
+      assert.equal(result.baseline.w, 1280);
+      assert.equal(result.baseline.h, 720);
+      // Same directory as content — URL signature cannot tell the ad apart;
+      // the 1920x1080 block must be flagged by strict resolution alone.
+      assert.deepEqual(result.ranges, [{ start: 8, end: 14 }]);
+      assert.equal(result.sigAdGroups, 0);
+    } finally {
+      restore();
+    }
+  });
+
+  it("flags a 16:9 1080p block inside 2542x1080 letterboxed content", async () => {
+    const restore = stubFetch(sameDirPlaylist(3), (url) =>
+      /ad\d\.ts/.test(url) ? SPS_1080P : SPS_2542X1080);
+    try {
+      const result = await scanAdRanges("https://cdn.example/index.m3u8");
+      assert.deepEqual(result.ranges, [{ start: 8, end: 14 }]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("filters sub-5s resolution anomalies", async () => {
+    // A single 2s odd-resolution segment in the same directory must be
+    // swallowed by MIN_AD_RANGE_S, not treated as an ad block.
+    const text = [
+      "#EXTM3U",
+      "#EXTINF:4.0,",
+      "https://cdn.example/ep/hls/s1.ts",
+      "#EXT-X-DISCONTINUITY",
+      "#EXTINF:2.0,",
+      "https://cdn.example/ep/hls/odd1.ts",
+      "#EXT-X-DISCONTINUITY",
+      "#EXTINF:4.0,",
+      "https://cdn.example/ep/hls/s2.ts",
+      "#EXT-X-ENDLIST"
+    ].join("\n");
+    const restore = stubFetch(text, (url) =>
+      /odd/.test(url) ? SPS_1080P : SPS_2542X1080);
+    try {
+      const result = await scanAdRanges("https://cdn.example/index.m3u8");
+      assert.deepEqual(result.ranges, []);
+    } finally {
+      restore();
+    }
+  });
+
+  it("never flags probe-failed groups on resolution", async () => {
+    // The candidate block's first segment has no parseable SPS and shares the
+    // content directory — a 512KB partial probe must not misclassify it.
+    const restore = stubFetch(sameDirPlaylist(3), (url) =>
+      /ad\d\.ts/.test(url) ? new Uint8Array([1, 2, 3]) : SPS_2542X1080);
+    try {
+      const result = await scanAdRanges("https://cdn.example/index.m3u8");
+      assert.equal(result.probed, 2);
+      assert.deepEqual(result.ranges, []);
+    } finally {
+      restore();
+    }
   });
 });
