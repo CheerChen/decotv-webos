@@ -124,3 +124,36 @@ export function pickBestAvailableSource(
   return rankSourcesByProbe(sources, probeResults)
     .find((source) => !failed.has(getSourceProbeKey(source))) || null;
 }
+
+// Return the display label for episode `index` of `source`.
+// When the source provides `episodes_titles` AND they are version/language
+// labels (e.g. ["HD国语", "HD粤语"]), use the title directly. When the
+// titles are just episode-number strings (e.g. ["第01集", "第02集"]) or
+// absent, fall back to "第 N 集".
+export function episodeLabel(source, index) {
+  if (hasVersionLabels(source)) {
+    const titles = source.episodes_titles;
+    if (titles[index]) return titles[index];
+  }
+  return `第 ${index + 1} 集`;
+}
+
+// True when the source uses episodes_titles as version/language labels
+// rather than sequential episode numbers (e.g. a movie with 国语/粤语 cuts).
+// Heuristic: titles exist, match episodes length, and at least one title
+// does NOT match the "第N集" / "第 NN 集" / plain-number pattern that
+// resource sites use for normal sequential episodes.
+var EP_NUM_RE = /^第?\s*0*\d+\s*[集话話期回]$/;
+var PURE_NUM_RE = /^0*\d+$/;
+export function hasVersionLabels(source) {
+  const titles = source && Array.isArray(source.episodes_titles) ? source.episodes_titles : null;
+  if (!titles || titles.length === 0) return false;
+  if (titles.length !== (source.episodes || []).length) return false;
+  // If every title looks like a sequential episode number (第N集 / N集 /
+  // plain number), it's a normal series — not version labels.
+  var allEpisodeNumbers = titles.every(function (t) {
+    var s = String(t || "").trim();
+    return EP_NUM_RE.test(s) || PURE_NUM_RE.test(s);
+  });
+  return !allEpisodeNumbers;
+}

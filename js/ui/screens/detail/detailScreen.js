@@ -23,7 +23,9 @@ import { posterAttrs, hydratePosters } from "../../posterImage.js";
 import { renderProbeCell } from "../../probeLabel.js";
 import {
   getSourceProbeKey,
-  rankSourcesByProbe
+  rankSourcesByProbe,
+  episodeLabel,
+  hasVersionLabels
 } from "../../../core/network/sourceRanking.js";
 import {
   getPreferCache,
@@ -242,9 +244,16 @@ export const DetailScreen = {
     const record = this._playRecord();
     let label = "播放";
     if (record && (Number(record.play_time) > 0 || Number(record.index) > 1)) {
-      label = Number(record.total_episodes) > 1
-        ? `继续播放 第 ${record.index} 集`
-        : "继续播放";
+      const src = this.currentSource || this.sources?.find((s) => s.id === String(record.id) && s.source === record.source);
+      const isVersions = hasVersionLabels(src);
+      if (Number(record.total_episodes) > 1) {
+        const epTag = isVersions && src
+          ? episodeLabel(src, Number(record.index) - 1)
+          : `第 ${record.index} 集`;
+        label = `继续播放 ${epTag}`;
+      } else {
+        label = "继续播放";
+      }
     }
     btn.innerHTML = `${PLAY_ICON}<span>${escapeHtml(label)}</span>`;
   },
@@ -617,6 +626,8 @@ export const DetailScreen = {
       return;
     }
     const eps = this.currentSource.episodes;
+    const src = this.currentSource;
+    const isVersions = hasVersionLabels(src);
     const record = this._playRecord();
     const resumeIdx = record && Number(record.index) >= 1
       ? Math.min(Number(record.index) - 1, eps.length - 1)
@@ -624,11 +635,15 @@ export const DetailScreen = {
     head.style.display = "flex";
     const hint = this.container.querySelector("#episodesHint");
     if (hint) {
-      hint.textContent = `共 ${eps.length} 集${resumeIdx >= 0 ? ` · 上次看到第 ${resumeIdx + 1} 集` : ""}`;
+      const countWord = isVersions ? "版本" : "集";
+      const resumeWord = isVersions
+        ? ` · 上次观看 ${episodeLabel(src, resumeIdx)}`
+        : ` · 上次看到第 ${resumeIdx + 1} 集`;
+      hint.textContent = `共 ${eps.length} ${countWord}${resumeIdx >= 0 ? resumeWord : ""}`;
     }
     list.style.display = "grid";
     list.innerHTML = eps.map((_, i) => `
-      <div class="episode-item${i === resumeIdx ? " resume" : ""} focusable" data-action="play-ep" data-index="${i}">第 ${i + 1} 集</div>
+      <div class="episode-item${i === resumeIdx ? " resume" : ""} focusable" data-action="play-ep" data-index="${i}">${escapeHtml(episodeLabel(src, i))}</div>
     `).join("");
     ScreenUtils.indexFocusables(list, ".focusable");
   },
@@ -698,7 +713,8 @@ export const DetailScreen = {
         cover: source.poster || this.poster || "",
         source_name: source.source_name || source.source,
         year: source.year || this.year || "",
-        total_episodes: source.episodes.length
+        total_episodes: source.episodes.length,
+        episodes_titles: Array.isArray(source.episodes_titles) ? source.episodes_titles : []
       },
       // Pass through all sources + current probe results so the player can
       // offer source switching with the same ranking.

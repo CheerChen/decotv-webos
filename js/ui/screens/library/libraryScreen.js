@@ -5,6 +5,7 @@ import { Router } from "../../navigation/router.js";
 import { api } from "../../../core/network/decotvClient.js";
 import { LocalLibrary } from "../../../core/storage/localLibrary.js";
 import { LibrarySync } from "../../../core/storage/librarySync.js";
+import { episodeLabel, hasVersionLabels } from "../../../core/network/sourceRanking.js";
 import { showToast } from "../../toast.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
 import { posterAttrs } from "../../posterImage.js";
@@ -113,7 +114,13 @@ export const LibraryScreen = {
       const title = escapeHtml(rec.title || "");
       const sourceName = escapeHtml(rec.source_name || "");
       const year = escapeHtml(rec.year || "");
-      const idx = rec.index != null ? `看到第 ${rec.index} 集` : "";
+      const idx = rec.index != null
+        ? (rec.total_episodes > 1
+          ? (hasVersionLabels(rec)
+            ? `观看 ${episodeLabel(rec, rec.index - 1)}`
+            : `看到第 ${rec.index} 集`)
+          : "")
+        : "";
       const sub = [year, idx, `<span class="source-pill">${sourceName}</span>`].filter(Boolean).join(" ");
       return `
         <div class="poster-card focusable" data-action="open-rec" data-key="${escapeHtml(key)}" data-index="${i}">

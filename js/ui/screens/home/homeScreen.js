@@ -8,6 +8,7 @@ import { tmdb } from "../../../core/network/tmdbClient.js";
 import { getProvider } from "../../../core/storage/catalogProvider.js";
 import { showToast } from "../../toast.js";
 import { LocalLibrary } from "../../../core/storage/localLibrary.js";
+import { episodeLabel, hasVersionLabels } from "../../../core/network/sourceRanking.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
 import { posterAttrs } from "../../posterImage.js";
 import { escapeHtml, formatTime } from "../../utils.js";
@@ -210,7 +211,11 @@ export const HomeScreen = {
     const cards = entries.map(([key, rec], idx) => {
       const poster = posterAttrs(rec.cover);
       const title = escapeHtml(rec.title || "");
-      const ep = rec.total_episodes > 1 && rec.index ? `看到第 ${rec.index} 集` : "";
+      const ep = rec.total_episodes > 1 && rec.index
+        ? (hasVersionLabels(rec)
+          ? `观看 ${episodeLabel(rec, rec.index - 1)}`
+          : `看到第 ${rec.index} 集`)
+        : "";
       const progress = rec.total_time > 0
         ? `${formatTime(rec.play_time)} / ${formatTime(rec.total_time)}`
         : "";
