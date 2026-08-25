@@ -56,6 +56,8 @@ export class PlaybackController {
     this._proxiedForToken = 0;     // playToken of the stream currently routed via m3u8 proxy
     this._proxyKeepalive = null;   // cancel function for the keepalive poller
     this._directPlayUrl = "";      // unproxied URL of the current stream, for error fallback
+    this._proxyFailed = false;     // proxy already failed for this source — don't re-proxy
+    this._filteredAdCount = 0;     // number of ad groups stripped by the proxy (for OSD badge)
     this.onStateChange = onStateChange;
     this.onMetaChange = onMetaChange;
     this.onAdSkipState = onAdSkipState;
@@ -131,6 +133,7 @@ export class PlaybackController {
     // timeline — no mid-play restart, no leaked head ads. Falls back to the
     // direct URL when the service is unavailable (non-webOS, bind failed).
     this._resetProxyState();
+    this._proxyFailed = false;
     this._directPlayUrl = playUrl;
     let effectiveUrl = playUrl;
     if (isHlsPlayUrl(playUrl) && !isLocalProxyUrl(playUrl)) {
@@ -140,6 +143,7 @@ export class PlaybackController {
         effectiveUrl = `http://127.0.0.1:${port}/proxy?url=${encodeURIComponent(playUrl)}`;
         this._proxiedForToken = token;
         this._startProxyKeepalive();
+        this._fetchFilteredAdCount(port, playUrl, token);
         console.info("[DecoTV] playing via m3u8 proxy", { port });
       } else {
         console.info("[DecoTV] m3u8 proxy unavailable, playing direct URL");
@@ -176,11 +180,14 @@ export class PlaybackController {
 
   // Proxy routing state is reset per playback (playIndex) and on cleanup —
   // NOT inside _cancelAdScan, which also runs when a scan restarts on a
-  // stream that is already playing through the proxy.
+  // stream that is already playing through the proxy. Does NOT reset
+  // _proxyFailed — that flag survives _retryDirectAfterProxyError's call
+  // here and is only cleared at the start of a fresh playIndex.
   _resetProxyState() {
     this._stopProxyKeepalive();
     this._proxiedForToken = 0;
     this._directPlayUrl = "";
+    this._filteredAdCount = 0;
   }
 
   _startAdScan(playUrl, token) {
@@ -234,6 +241,7 @@ export class PlaybackController {
   async _switchToProxySource(originalUrl, token) {
     if (token !== this.playToken) return;
     if (this._proxiedForToken === token) return;
+    if (this._proxyFailed) return; // already tried & failed — don't re-proxy
     const port = await getM3u8ProxyPort();
     if (!port || token !== this.playToken) {
       console.info("[DecoTV] m3u8 proxy unavailable, playing original URL");
@@ -251,6 +259,8 @@ export class PlaybackController {
       if (r.ok && token === this.playToken) {
         const meta = await r.json();
         const ranges = Array.isArray(meta.removedRanges) ? meta.removedRanges : [];
+        this._filteredAdCount = ranges.length;
+        this.onMetaChange?.();
         // Subtract the overlap of each removed ad range with [0, originalTime].
         let removed = 0;
         for (const range of ranges) {
@@ -302,6 +312,20 @@ export class PlaybackController {
     }
   }
 
+  // Async one-shot: ask the proxy how many ad groups it stripped, for the
+  // OSD shield badge. Fire-and-forget — failure just means no badge number.
+  _fetchFilteredAdCount(port, originalUrl, token) {
+    fetch(`http://127.0.0.1:${port}/proxy?url=${encodeURIComponent(originalUrl)}&meta=1`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((meta) => {
+        if (token !== this.playToken) return;
+        const ranges = meta && Array.isArray(meta.removedRanges) ? meta.removedRanges : [];
+        this._filteredAdCount = ranges.length;
+        this.onMetaChange?.();
+      })
+      .catch(() => {});
+  }
+
   applyResume() {
     if (this.resumeApplied || !this.video) return;
     if (this.resumeTime <= 0) {
@@ -336,6 +360,7 @@ export class PlaybackController {
       year: meta.year || "",
       index: this.index + 1,
       total_episodes: meta.total_episodes || this.episodes.length,
+      episodes_titles: Array.isArray(meta.episodes_titles) ? meta.episodes_titles : [],
       play_time: current,
       total_time: duration,
     };
@@ -391,6 +416,7 @@ export class PlaybackController {
   _retryDirectAfterProxyError() {
     const url = this._directPlayUrl;
     this._resetProxyState();
+    this._proxyFailed = true; // prevent _switchToProxySource from re-proxying
     const token = ++this.playToken;
     this._cancelAdScan();
     // After a failed load() the media element's currentTime is usually 0

@@ -1,8 +1,9 @@
 // playerOsd.js — player controls, progress display, and focus state.
 
 import { ScreenUtils } from "../../navigation/screen.js";
-import { formatTime } from "../../utils.js";
+import { formatTime, escapeHtml } from "../../utils.js";
 import { outroMarkerPercent } from "../../../core/playback/outroMark.js";
+import { episodeLabel, hasVersionLabels } from "../../../core/network/sourceRanking.js";
 
 const SCRUB_HOLD_MS = 350;
 const ICONS = {
@@ -11,6 +12,7 @@ const ICONS = {
   prevEp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h2v14H5zM18 6l-9 6 9 6z"/></svg>',
   nextEp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l9 6-9 6zM17 5h2v14h-2z"/></svg>',
   restart: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>',
+  shield: '<svg viewBox="0 0 24 24" aria-hidden="true" class="ad-shield-icon"><path d="M12 2L4 5v6c0 5.5 3.8 10.7 8 12 4.2-1.3 8-6.5 8-12V5l-8-3z" fill="currentColor"/><path d="M9.5 12.5l1.8 1.8 3.2-3.2" stroke="#1a1a2e" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
 
 export class PlayerOsd {
@@ -22,6 +24,9 @@ export class PlayerOsd {
     getEpisodes,
     getIndex,
     getAllSources,
+    getCurrentSource,
+    getFilteredAdCount,
+    getIsProxied,
     getPaused,
     getOutroMark,
     getEpisodePanelVisible,
@@ -35,6 +40,9 @@ export class PlayerOsd {
     this.getEpisodes = getEpisodes;
     this.getIndex = getIndex;
     this.getAllSources = getAllSources;
+    this.getCurrentSource = getCurrentSource;
+    this.getFilteredAdCount = getFilteredAdCount;
+    this.getIsProxied = getIsProxied;
     this.getPaused = getPaused;
     this.getOutroMark = getOutroMark;
     this.getEpisodePanelVisible = getEpisodePanelVisible;
@@ -78,10 +86,22 @@ export class PlayerOsd {
     const index = this.getIndex();
     const title = this.getTitle() || "";
     const sourceName = this.getSourceName() || "";
-    const epLabel = episodes.length > 1 ? `第 ${index + 1} 集 / 共 ${episodes.length} 集` : "";
+    const src = this.getCurrentSource ? this.getCurrentSource() || {} : {};
+    const isVersions = hasVersionLabels(src);
+    const countWord = isVersions ? "版本" : "集";
+    const epLabel = episodes.length > 1
+      ? `${episodeLabel(src, index)} / 共 ${episodes.length} ${countWord}`
+      : "";
+    const adCount = this.getFilteredAdCount ? this.getFilteredAdCount() : 0;
+    const isProxied = this.getIsProxied ? this.getIsProxied() : false;
+    const subtitleParts = [sourceName, epLabel].filter(Boolean);
+    let subtitleHtml = escapeHtml(subtitleParts.join(" · "));
+    if (isProxied) {
+      const countHtml = adCount > 0 ? `<span class="ad-filter-count">${adCount}</span>` : "";
+      subtitleHtml += ` <span class="ad-filter-badge">${ICONS.shield}${countHtml}</span>`;
+    }
     this.container.querySelector("#playerTitle").textContent = title;
-    this.container.querySelector("#playerSubtitle").textContent =
-      [sourceName, epLabel].filter(Boolean).join(" · ");
+    this.container.querySelector("#playerSubtitle").innerHTML = subtitleHtml;
     this.updateStats();
   }
 

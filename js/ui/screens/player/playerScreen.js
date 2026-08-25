@@ -18,7 +18,9 @@ const RECORD_SAVE_INTERVAL_MS = 10000;
 const SCRUB_HOLD_MS = 350;
 import {
   getSourceProbeKey,
-  rankSourcesByProbe
+  rankSourcesByProbe,
+  episodeLabel,
+  hasVersionLabels
 } from "../../../core/network/sourceRanking.js";
 import {
   initialStallState,
@@ -165,6 +167,9 @@ export const PlayerScreen = {
       getEpisodes: () => this.episodes,
       getIndex: () => this.index,
       getAllSources: () => this.allSources,
+      getCurrentSource: () => this.allSources.find((s) => getSourceProbeKey(s) === this.currentSourceKey) || this.params || {},
+      getFilteredAdCount: () => this.playback?._filteredAdCount || 0,
+      getIsProxied: () => this.playback?._proxiedForToken === this.playback?.playToken && !this.playback?._proxyFailed,
       getPaused: () => this.paused,
       getOutroMark: () => this._getOutroMark(),
       getEpisodePanelVisible: () => this.episodePanelVisible,
@@ -586,13 +591,15 @@ export const PlayerScreen = {
 
   _renderEpisodePanel() {
     this.container.querySelector("#playerEpisodePanel")?.remove();
+    const src = this.allSources.find((s) => getSourceProbeKey(s) === this.currentSourceKey) || this.params || {};
+    const isVersions = hasVersionLabels(src);
     const panel = createSidePanel({
       id: "playerEpisodePanel",
-      title: "剧集列表",
+      title: isVersions ? "版本列表" : "剧集列表",
       hint: "▲▼ 选择 · OK 播放 · 返回 关闭",
       listId: "playerEpisodeList",
       items: this.episodes.map((_, i) => ({
-        label: `第 ${i + 1} 集`,
+        label: episodeLabel(src, i),
         sub: i === this.index ? "正在播放" : "",
         selected: i === this.episodePanelIndex,
         attrs: { "data-panel-index": i },
