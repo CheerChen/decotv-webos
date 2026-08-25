@@ -215,34 +215,24 @@ export async function scanAdRanges(playUrl, opts = {}) {
     throw new Error("Not an m3u8 playlist");
   }
 
-  // Dynamic ad-stitching check: a playlist that mixes multiple date-prefixed
-  // storage paths *may* be re-randomizing ad insertion points on every request.
-  // But a source can also stitch ads at fixed positions — that is still
-  // scannable. To tell the two apart, fetch the variant a second time and
-  // compare: if the segment ordering differs, ad positions are randomized and
-  // the pre-scan ranges won't match what the player actually downloads.
+  // Dynamic ad-stitching: a playlist that mixes multiple date-prefixed
+  // storage paths is stitched by the CDN. Ad positions drift over time
+  // (minutes to tens of minutes), so a pre-scan's ranges won't match what
+  // the player actually downloads by the time it reaches those positions.
+  // A short-window re-fetch comparison is NOT a reliable disproof: the CDN
+  // may serve the same stitched version within an edge-cache window and
+  // rotate it later. Treat any multi-date-path playlist as dynamic and let
+  // the on-device m3u8 proxy handle it (real-time filtering per request).
   if (isDynamicStitchedPlaylist(text, finalUrl)) {
-    let unstable = false;
-    try {
-      const second = await fetchPlaylistText(finalUrl, signal);
-      unstable = second.text !== text;
-    } catch (_) {
-      // Network hiccup on the confirmation fetch — be conservative and skip.
-      unstable = true;
-    }
-    if (unstable) {
-      return {
-        ranges: [],
-        baseline: null,
-        groups: 0,
-        probed: 0,
-        sigAdGroups: 0,
-        elapsedMs: Date.now() - started,
-        dynamicStitched: true
-      };
-    }
-    // Same content on re-fetch — ads are stitched at fixed positions, so the
-    // pre-scan ranges are valid. Fall through to normal scanning.
+    return {
+      ranges: [],
+      baseline: null,
+      groups: 0,
+      probed: 0,
+      sigAdGroups: 0,
+      elapsedMs: Date.now() - started,
+      dynamicStitched: true
+    };
   }
 
   const groups = parseMediaGroups(text, finalUrl);
@@ -374,8 +364,14 @@ export function isDynamicStitchedPlaylist(text, baseUrl) {
   return dates.size > 1;
 }
 
+// The on-device m3u8 ad-filter proxy URL shape (service.js localhost server).
+export function isLocalProxyUrl(url) {
+  return /^http:\/\/127\.0\.0\.1:\d+\/proxy\?/.test(url || "");
+}
+
 export function isHlsPlayUrl(url) {
   if (!url) return false;
+  if (isLocalProxyUrl(url)) return true;
   if (/\/api\/proxy\/m3u8/i.test(url)) return true;
   return /\.m3u8(\?|#|$)/i.test(url);
 }

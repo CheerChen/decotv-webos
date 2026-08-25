@@ -216,3 +216,49 @@ export async function clearLunaSession(baseUrl) {
   if (!hasLunaTransport()) return;
   await serviceCall("clearSession", { baseUrl });
 }
+
+// Query the on-device m3u8 ad-filter proxy port. The service hosts a
+// localhost HTTP server that rewrites HLS playlists to strip
+// dynamically-stitched ads before the player sees them. Returns 0 when the
+// service is unavailable or the proxy has not started — the caller falls
+// back to the original URL in that case.
+// Doubles as a keepalive ping: webOS dynamic services are killed after
+// idle, so the app calls this periodically during playback to keep the
+// proxy server alive.
+export async function getM3u8ProxyPort() {
+  if (!hasLunaTransport()) return 0;
+  try {
+    const result = await serviceCall("getM3u8ProxyPort", {}, { timeoutMs: 5000 });
+    if (!result?.returnValue || !result?.ready) return 0;
+    return Number(result.port) || 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+// Open a subscription to the service's keepalive method. While this
+// subscription is active, ls-hubd will not kill the dynamic service, so
+// the localhost m3u8 proxy server stays up for the entire stream.
+// Returns a cancel function — call it when playback ends to release the
+// service. Returns null if Luna transport is unavailable.
+//
+// Note: subscription alone was found to keep the Luna layer alive but the
+// HTTP server still died after ~10s on some webOS versions. We use a 5s
+// polling interval instead, which is well within the ~10s idle timeout
+// and reliably keeps both the Luna service and HTTP server alive.
+export function subscribeKeepalive() {
+  if (!hasLunaTransport()) return null;
+  const timer = setInterval(() => {
+    try {
+      window.webOS.service.request(`luna://${DECOTV_SERVICE}`, {
+        method: "getM3u8ProxyPort",
+        parameters: {},
+        onSuccess: () => {},
+        onFailure: () => {}
+      });
+    } catch (_) {}
+  }, 5000);
+  return () => {
+    clearInterval(timer);
+  };
+}

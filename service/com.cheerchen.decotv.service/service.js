@@ -15,6 +15,7 @@ var originOf = require("./sessionStore").originOf;
 var ImageCache = require("./imageCache").ImageCache;
 var ImagePipeline = require("./imagePipeline").ImagePipeline;
 var DoubanCache = require("./doubanCache").DoubanCache;
+var m3u8Filter = require("./m3u8AdFilter.js");
 
 var SERVICE_ID = "com.cheerchen.decotv.service";
 // The cookie jar lives INSIDE the service's install directory on purpose: its
@@ -607,9 +608,281 @@ service.register("diagnostics", function (message) {
       nodeVersion: process.version,
       hasSession: keys.indexOf("auth") >= 0,
       cookieKeys: keys,
-      images: images.diagnostics()
+      images: images.diagnostics(),
+      m3u8ProxyPort: m3u8ProxyPort
     });
   } catch (error) {
     fail(message, error);
   }
 });
+
+// ── m3u8 ad-filter proxy server ───────────────────────────────────────────
+// A localhost HTTP server that rewrites HLS playlists to strip
+// dynamically-stitched ad segments before the player's native HLS pipeline
+// sees them. The webview sets video.src to
+//   http://127.0.0.1:<port>/proxy?url=<upstream m3u8>
+// and the pipeline fetches every playlist through this single-fetch path,
+// so ad positions that drift between requests can no longer sneak in.
+//
+// Segments are left as direct CDN URLs (bandwidth); only playlists are
+// proxied. The filter core is in m3u8AdFilter.js (pure functions, shared
+// with the sidecar control group).
+//
+// The server starts when the service is first launched (any Luna call wakes
+// it) and lives as long as the service process. webOS dynamic services are
+// killed after idle, so the app must keep the service alive by calling a
+// Luna method periodically during playback — getM3u8ProxyPort doubles as
+// the keepalive ping.
+
+var M3U8_PROXY_PORT = Number(process.env.DECOTV_M3U8_PORT) || 3999;
+var M3U8_UPSTREAM_TIMEOUT_MS = 12000;
+var M3U8_PROXY_UA = "Mozilla/5.0 (Web0S; Linux/SmartTV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.270 Safari/537.36 WebAppManager";
+var m3u8ProxyPort = 0; // 0 = not started
+
+// Extract the first variant URL from a master playlist, resolved against
+// the master's own URL. Returns null if no variant is found.
+function firstVariantFromMaster(text, baseUrl) {
+  var lines = String(text).split(/\r?\n/);
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (line.indexOf("#EXT-X-STREAM-INF:") === 0) {
+      var j = i + 1;
+      while (j < lines.length && lines[j].trim() === "") j++;
+      if (j < lines.length) {
+        var nxt = lines[j].trim();
+        if (nxt && nxt.charAt(0) !== "#") return resolveUrl(baseUrl, nxt);
+      }
+    }
+  }
+  return null;
+}
+
+// Resolve a possibly-relative URL against a base URL. Works on old Node.
+function resolveUrl(base, rel) {
+  try { return new URLCtor(rel, base).href; }
+  catch (_) { return rel; }
+}
+
+function fetchUpstreamM3u8(targetUrl, cb) {
+  var target;
+  try { target = new URLCtor(targetUrl); }
+  catch (e) { cb(e); return; }
+  var client = target.protocol === "https:" ? https : http;
+  var agent = target.protocol === "https:" ? httpsAgent : httpAgent;
+  var chunks = [];
+  var req = client.request({
+    protocol: target.protocol,
+    hostname: target.hostname,
+    port: target.port || (target.protocol === "https:" ? 443 : 80),
+    method: "GET",
+    path: target.pathname + target.search,
+    headers: { "User-Agent": M3U8_PROXY_UA, "Accept": "*/*" },
+    agent: agent
+  }, function (res) {
+    // Manual redirect follow — old Node's http.request doesn't auto-follow.
+    if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+      var next = new URLCtor(res.headers.location, targetUrl).href;
+      res.resume();
+      fetchUpstreamM3u8(next, cb);
+      return;
+    }
+    res.on("data", function (c) { chunks.push(c); });
+    res.on("end", function () {
+      cb(null, {
+        status: res.statusCode,
+        body: Buffer.concat(chunks).toString("utf8"),
+        finalUrl: targetUrl
+      });
+    });
+  });
+  req.setTimeout(M3U8_UPSTREAM_TIMEOUT_MS, function () {
+    req.destroy(new Error("upstream timeout"));
+  });
+  req.on("error", function (e) { cb(e); });
+  req.end();
+}
+
+var m3u8Server = http.createServer(function (req, res) {
+  // CORS — the webview is file://, every request here is cross-origin.
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
+
+  var parsed;
+  try { parsed = new URLCtor(req.url, "http://127.0.0.1:" + M3U8_PROXY_PORT); }
+  catch (e) {
+    res.writeHead(400, { "Content-Type": "text/plain" });
+    res.end("bad request");
+    return;
+  }
+
+  if (parsed.pathname === "/proxy") {
+    var targetUrl = parsed.searchParams.get("url");
+    if (!targetUrl) {
+      res.writeHead(400, { "Content-Type": "text/plain" });
+      res.end("missing url");
+      return;
+    }
+    var wantMeta = parsed.searchParams.get("meta") === "1";
+    fetchUpstreamM3u8(targetUrl, function (err, up) {
+      if (err) {
+        res.writeHead(502, { "Content-Type": "text/plain" });
+        res.end("upstream fail: " + (err.message || err));
+        return;
+      }
+      if (up.status !== 200) {
+        res.writeHead(502, { "Content-Type": "text/plain" });
+        res.end("upstream status " + up.status);
+        return;
+      }
+      // For master playlists, meta is not meaningful on the master itself
+      // (ad ranges live on the media playlist). Resolve the first variant
+      // and return its removed ranges so the caller gets a useful answer
+      // from a single request.
+      if (wantMeta) {
+        try {
+          var ranges;
+          if (m3u8Filter.isMasterPlaylist(up.body)) {
+            // Extract first variant URL and fetch it.
+            var variantUrl = firstVariantFromMaster(up.body, up.finalUrl);
+            if (variantUrl) {
+              fetchUpstreamM3u8(variantUrl, function (e2, up2) {
+                if (e2 || !up2 || up2.status !== 200) {
+                  res.writeHead(200, {
+                    "Content-Type": "application/json",
+                    "Cache-Control": "no-store"
+                  });
+                  res.end(JSON.stringify({ removedRanges: [] }));
+                  return;
+                }
+                try {
+                  ranges = m3u8Filter.removedAdRanges(up2.body, up2.finalUrl);
+                } catch (_) { ranges = []; }
+                res.writeHead(200, {
+                  "Content-Type": "application/json",
+                  "Cache-Control": "no-store"
+                });
+                res.end(JSON.stringify({ removedRanges: ranges }));
+              });
+            } else {
+              ranges = [];
+            }
+          } else {
+            ranges = m3u8Filter.removedAdRanges(up.body, up.finalUrl);
+          }
+          if (ranges !== undefined) {
+            res.writeHead(200, {
+              "Content-Type": "application/json",
+              "Cache-Control": "no-store"
+            });
+            res.end(JSON.stringify({ removedRanges: ranges }));
+          }
+        } catch (e) {
+          res.writeHead(500, { "Content-Type": "text/plain" });
+          res.end("meta fail: " + (e.message || e));
+        }
+        return;
+      }
+      var proxyBase = "http://127.0.0.1:" + m3u8ProxyPort + "/proxy";
+      var rewriteUrl = function (u, opts) {
+        if (opts && opts.kind === "variant") {
+          return proxyBase + "?url=" + encodeURIComponent(u);
+        }
+        return u; // segments direct
+      };
+      try {
+        var rewritten = m3u8Filter.filterPlaylist(up.body, up.finalUrl, { rewriteUrl: rewriteUrl });
+        res.writeHead(200, {
+          "Content-Type": "application/vnd.apple.mpegurl",
+          "Cache-Control": "no-store"
+        });
+        res.end(rewritten);
+      } catch (e) {
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("rewrite fail: " + (e.message || e));
+      }
+    });
+    return;
+  }
+
+  res.writeHead(404, { "Content-Type": "text/plain" });
+  res.end("not found");
+});
+
+// Bind with a retry ladder. Measured failure mode: after the service process
+// is killed and relaunched, listen() on the previous port can fail while the
+// old socket lingers — a fixed port would leave the proxy dead forever. Walk
+// up from the base port with a short delay per attempt; the app never
+// hardcodes the port (it asks getM3u8ProxyPort before every playback), so a
+// changed port is picked up on the next play.
+var M3U8_PORT_ATTEMPTS = 10;
+var M3U8_PORT_RETRY_DELAY_MS = 250;
+var m3u8ProxyState = "starting"; // starting | ready | failed
+var m3u8PortWaiters = []; // getM3u8ProxyPort callers awaiting bind settle
+
+function respondM3u8Port(message) {
+  message.respond({
+    returnValue: true,
+    port: m3u8ProxyPort,
+    ready: m3u8ProxyPort > 0
+  });
+}
+
+function settleM3u8Bind(state) {
+  m3u8ProxyState = state;
+  var waiters = m3u8PortWaiters;
+  m3u8PortWaiters = [];
+  for (var i = 0; i < waiters.length; i++) {
+    try { respondM3u8Port(waiters[i]); } catch (_) {}
+  }
+}
+
+function bindM3u8Server(attempt) {
+  var port = M3U8_PROXY_PORT + attempt;
+  // Manage both listeners explicitly: listen(port, host, cb) would leave its
+  // "listening" once-listener behind on a failed attempt, and every stale one
+  // would fire (with its stale port) when a later attempt succeeds.
+  var onError = function (e) {
+    m3u8Server.removeListener("listening", onListening);
+    console.log("[m3u8-proxy] bind :" + port + " failed: " + (e.message || e));
+    if (attempt + 1 < M3U8_PORT_ATTEMPTS) {
+      setTimeout(function () { bindM3u8Server(attempt + 1); }, M3U8_PORT_RETRY_DELAY_MS);
+    } else {
+      console.log("[m3u8-proxy] all bind attempts failed, proxy disabled");
+      settleM3u8Bind("failed");
+    }
+  };
+  var onListening = function () {
+    m3u8Server.removeListener("error", onError);
+    // Post-bind runtime errors must not crash the whole service process.
+    m3u8Server.on("error", function (e) {
+      console.log("[m3u8-proxy] server error: " + (e.message || e));
+    });
+    m3u8ProxyPort = port;
+    console.log("[m3u8-proxy] listening on http://127.0.0.1:" + m3u8ProxyPort);
+    settleM3u8Bind("ready");
+  };
+  m3u8Server.once("error", onError);
+  m3u8Server.once("listening", onListening);
+  m3u8Server.listen(port, "127.0.0.1");
+}
+
+bindM3u8Server(0);
+
+// App queries the proxy port before every playback (and polls it as the
+// keepalive ping during proxied playback). While the bind ladder is still
+// running — the common case right after a cold service wake — defer the
+// response until it settles, so the app never sees a spurious ready:false.
+service.register("getM3u8ProxyPort", function (message) {
+  if (m3u8ProxyState === "starting") {
+    m3u8PortWaiters.push(message);
+    return;
+  }
+  respondM3u8Port(message);
+});
+
+// NOTE: a subscribe-mode "keepalive" method used to live here. Measured
+// on-device: an open Luna subscription keeps the Luna layer alive but does
+// NOT prevent the HTTP server from dying at the ~10s dynamic-service idle
+// timeout. The app pins the service by polling getM3u8ProxyPort every 5s
+// during proxied playback instead (lunaTransport.subscribeKeepalive).
