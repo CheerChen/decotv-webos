@@ -46,6 +46,22 @@ function resolveUrl(base, ref) {
   try { return new URLCtor(ref, base).href; } catch (_) { return ref; }
 }
 
+// Rewrite the URI="..." attribute inside a tag line (e.g. #EXT-X-KEY,
+// #EXT-X-MAP) to an absolute URL resolved against baseUrl. Without this,
+// a relative URI like URI="enc.key" would be resolved against the proxy
+// host (127.0.0.1:3999) by the player, not the CDN — the key fetch would
+// 404 and encrypted segments would fail to decrypt.
+function rewriteTagUri(tagLine, baseUrl) {
+  if (!URLCtor || !baseUrl) return tagLine;
+  var m = tagLine.match(/URI="([^"]*)"/);
+  if (!m) return tagLine;
+  var uri = m[1];
+  // Already absolute — leave alone.
+  if (/^https?:\/\//i.test(uri)) return tagLine;
+  var abs = resolveUrl(baseUrl, uri);
+  return tagLine.slice(0, m.index) + 'URI="' + abs + '"' + tagLine.slice(m.index + m[0].length);
+}
+
 // Normalize a segment URL to its origin + directory (filename and query
 // stripped), e.g. https://cdn.example/2025/1107/4M/hls/a.ts →
 // https://cdn.example/2025/1107/4M/hls/
@@ -186,7 +202,7 @@ function rewriteMediaPlaylist(text, baseUrl, opts) {
   // If no usable majority signature, the playlist has no detectable ad
   // insertion by this heuristic — return with URLs rewritten only.
   if (baselineSig === null) {
-    return emitMedia(items, rewriteUrl);
+    return emitMedia(items, rewriteUrl, baseUrl);
   }
 
   // Mark which item indices belong to ad groups.
@@ -243,7 +259,7 @@ function rewriteMediaPlaylist(text, baseUrl, opts) {
       // A pending content-internal disc before a trailing tag is meaningless
       // (no segment after it to reset the decoder for), so drop it.
       pendingDisc = false;
-      out.push(it.text);
+      out.push(rewriteTagUri(it.text, baseUrl));
     }
   }
   return out.join("\n");
@@ -251,7 +267,7 @@ function rewriteMediaPlaylist(text, baseUrl, opts) {
 
 // Emit a media playlist with only URL rewriting (no ad stripping). Used when
 // no majority signature is found.
-function emitMedia(items, rewriteUrl) {
+function emitMedia(items, rewriteUrl, baseUrl) {
   var out = [];
   for (var i = 0; i < items.length; i++) {
     var it = items[i];
@@ -262,7 +278,7 @@ function emitMedia(items, rewriteUrl) {
       out.push(rewriteUrl(it.url, { kind: "segment" }));
       continue;
     }
-    out.push(it.text);
+    out.push(rewriteTagUri(it.text, baseUrl));
   }
   return out.join("\n");
 }
@@ -298,7 +314,7 @@ function rewriteMasterPlaylist(text, baseUrl, opts) {
         i = j;
       }
     } else {
-      out.push(lines[i]);
+      out.push(rewriteTagUri(lines[i], baseUrl));
     }
   }
   return out.join("\n");

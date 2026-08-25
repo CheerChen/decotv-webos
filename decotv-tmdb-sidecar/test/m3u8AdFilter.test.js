@@ -8,39 +8,62 @@
 // the ad blocks. Two playlists that differ only in ad position should
 // produce the same set of content segments (same URLs, same order) —
 // that is the whole correctness argument for the proxy approach.
+//
+// All test playlists are synthetic — no real CDN URLs or captured fixtures
+// are committed to the repo.
 
 var assert = require("assert");
 var fs = require("fs");
 var path = require("path");
 var filter = require("../m3u8AdFilter.js");
 
-var FIXTURE_DIR = path.join(__dirname);
-function loadFixture(name) {
-  return fs.readFileSync(path.join(FIXTURE_DIR, name), "utf8");
+// ── Synthetic playlist builder ────────────────────────────────────────────
+// Generates a media playlist with `contentCount` content segments (all under
+// the same date-path signature) and an ad block of `adCount` segments (under
+// a different date-path signature) inserted at `adInsertIndex`. Mirrors the
+// structure of real dynamically-stitched playlists without using real URLs.
+
+function makeStitchedPlaylist(contentCount, adCount, adInsertIndex) {
+  var lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-TARGETDURATION:4",
+               "#EXT-X-PLAYLIST-TYPE:VOD", "#EXT-X-MEDIA-SEQUENCE:0"];
+  for (var i = 0; i < contentCount; i++) {
+    if (i === adInsertIndex && adCount > 0) {
+      lines.push("#EXT-X-DISCONTINUITY");
+      for (var a = 0; a < adCount; a++) {
+        lines.push("#EXTINF:5.0,");
+        lines.push("https://cdn.test/20260811/ad/10097kb/hls/ad" + a + ".ts");
+      }
+      lines.push("#EXT-X-DISCONTINUITY");
+    }
+    lines.push("#EXTINF:2.0,");
+    lines.push("https://cdn.test/20260115/ep/3190kb/hls/seg" + i + ".ts");
+  }
+  lines.push("#EXT-X-ENDLIST");
+  return lines.join("\n");
 }
 
-// ── Test 1: real bfikuncdn playlist — ad segments removed, content intact ──
+// ── Test 1: stitched playlist filtering — ad segments removed, content intact ──
 
-function testRealPlaylistFiltering() {
-  var text = loadFixture("fixture_bfikuncdn_variant.m3u8");
-  var base = "https://bfikuncdn.com/20260115/mocDe1mI/3190kb/hls/index.m3u8";
+function testPlaylistFiltering() {
+  var text = makeStitchedPlaylist(20, 3, 10);
+  var base = "https://cdn.test/20260115/ep/3190kb/hls/index.m3u8";
   var out = filter.filterPlaylist(text, base, {
     rewriteUrl: function (u) { return u; }
   });
   var lines = out.split("\n");
 
-  var adSegs = lines.filter(function (l) { return /20260811\/lGevlkDG/.test(l); });
-  var contentSegs = lines.filter(function (l) { return /20260115\/mocDe1mI/.test(l); });
+  var adSegs = lines.filter(function (l) { return /20260811\/ad/.test(l); });
+  var contentSegs = lines.filter(function (l) { return /20260115\/ep/.test(l); });
   var discs = lines.filter(function (l) { return l === "#EXT-X-DISCONTINUITY"; });
   var hasEndlist = lines[lines.length - 1] === "#EXT-X-ENDLIST";
   var hasHeader = lines[0] === "#EXTM3U";
 
   assert.strictEqual(adSegs.length, 0, "ad segments should be removed");
-  assert.ok(contentSegs.length > 700, "content segments should be preserved (got " + contentSegs.length + ")");
+  assert.strictEqual(contentSegs.length, 20, "all 20 content segments should be preserved");
   assert.ok(discs.length >= 1, "at least one splice discontinuity should remain");
   assert.ok(hasEndlist, "ENDLIST should be preserved");
   assert.ok(hasHeader, "EXTM3U header should be preserved");
-  console.log("  PASS: real bfikuncdn playlist — 0 ad segs, " + contentSegs.length + " content segs, " + discs.length + " disc(s)");
+  console.log("  PASS: stitched playlist — 0 ad segs, " + contentSegs.length + " content segs, " + discs.length + " disc(s)");
 }
 
 // ── Test 2: content-internal discontinuity is preserved ──
@@ -51,25 +74,25 @@ function testContentInternalDiscPreserved() {
     "#EXT-X-VERSION:3",
     "#EXT-X-TARGETDURATION:4",
     "#EXTINF:2.0,",
-    "https://cdn.example/20260115/ep/3190kb/hls/a.ts",
+    "https://cdn.test/20260115/ep/3190kb/hls/a.ts",
     "#EXTINF:2.0,",
-    "https://cdn.example/20260115/ep/3190kb/hls/b.ts",
+    "https://cdn.test/20260115/ep/3190kb/hls/b.ts",
     "#EXT-X-DISCONTINUITY",
     "#EXTINF:2.0,",
-    "https://cdn.example/20260115/ep/3190kb/hls/c.ts",
+    "https://cdn.test/20260115/ep/3190kb/hls/c.ts",
     "#EXTINF:2.0,",
-    "https://cdn.example/20260115/ep/3190kb/hls/d.ts",
+    "https://cdn.test/20260115/ep/3190kb/hls/d.ts",
     "#EXT-X-DISCONTINUITY",
     "#EXTINF:2.0,",
-    "https://cdn.example/20260811/ad/10097kb/hls/ad1.ts",
+    "https://cdn.test/20260811/ad/10097kb/hls/ad1.ts",
     "#EXT-X-DISCONTINUITY",
     "#EXTINF:2.0,",
-    "https://cdn.example/20260115/ep/3190kb/hls/e.ts",
+    "https://cdn.test/20260115/ep/3190kb/hls/e.ts",
     "#EXTINF:2.0,",
-    "https://cdn.example/20260115/ep/3190kb/hls/f.ts",
+    "https://cdn.test/20260115/ep/3190kb/hls/f.ts",
     "#EXT-X-ENDLIST"
   ].join("\n");
-  var base = "https://cdn.example/20260115/ep/3190kb/hls/index.m3u8";
+  var base = "https://cdn.test/20260115/ep/3190kb/hls/index.m3u8";
   var out = filter.filterPlaylist(text, base, {
     rewriteUrl: function (u) { return u; }
   });
@@ -92,33 +115,10 @@ function testContentInternalDiscPreserved() {
 
 function testDriftInvariance() {
   function makePlaylist(adInsertIndex) {
-    var segs = [];
-    for (var i = 0; i < 10; i++) {
-      segs.push({
-        extinf: "#EXTINF:2.0,",
-        url: "https://cdn.example/20260115/ep/3190kb/hls/seg" + i + ".ts"
-      });
-    }
-    var ad = {
-      extinf: "#EXTINF:5.0,",
-      url: "https://cdn.example/20260811/ad/10097kb/hls/ad1.ts"
-    };
-    // Insert ad at adInsertIndex
-    var withAd = segs.slice(0, adInsertIndex).concat([ad]).concat(segs.slice(adInsertIndex));
-
-    var lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-TARGETDURATION:5"];
-    for (var j = 0; j < withAd.length; j++) {
-      if (j > 0 && (j === adInsertIndex || j === adInsertIndex + 1)) {
-        lines.push("#EXT-X-DISCONTINUITY");
-      }
-      lines.push(withAd[j].extinf);
-      lines.push(withAd[j].url);
-    }
-    lines.push("#EXT-X-ENDLIST");
-    return lines.join("\n");
+    return makeStitchedPlaylist(10, 1, adInsertIndex);
   }
 
-  var base = "https://cdn.example/20260115/ep/3190kb/hls/index.m3u8";
+  var base = "https://cdn.test/20260115/ep/3190kb/hls/index.m3u8";
   var rewriteUrl = function (u) { return u; };
 
   // Version A: ad at position 3
@@ -138,17 +138,20 @@ function testDriftInvariance() {
 // ── Test 4: removedAdRanges returns correct original-timeline ranges ──
 
 function testRemovedAdRanges() {
-  var text = loadFixture("fixture_bfikuncdn_variant.m3u8");
-  var base = "https://bfikuncdn.com/20260115/mocDe1mI/3190kb/hls/index.m3u8";
+  // 20 content segs (2s each = 40s total), 3 ad segs (5s each = 15s) at index 10
+  // Ad block starts at 20s (10 segs * 2s), ends at 35s (20s + 15s)
+  var text = makeStitchedPlaylist(20, 3, 10);
+  var base = "https://cdn.test/20260115/ep/3190kb/hls/index.m3u8";
   var ranges = filter.removedAdRanges(text, base);
 
   assert.ok(Array.isArray(ranges), "should return an array");
-  assert.ok(ranges.length > 0, "should detect at least one ad range");
-  for (var i = 0; i < ranges.length; i++) {
-    assert.ok(typeof ranges[i].start === "number", "range.start should be a number");
-    assert.ok(typeof ranges[i].end === "number", "range.end should be a number");
-    assert.ok(ranges[i].end > ranges[i].start, "range.end should be > range.start");
-  }
+  assert.strictEqual(ranges.length, 1, "should detect exactly one ad range");
+  assert.ok(typeof ranges[0].start === "number", "range.start should be a number");
+  assert.ok(typeof ranges[0].end === "number", "range.end should be a number");
+  assert.ok(ranges[0].end > ranges[0].start, "range.end should be > range.start");
+  // Ad starts at 20s (10 * 2.0), ends at 35s (20 + 3 * 5.0)
+  assert.ok(Math.abs(ranges[0].start - 20) < 0.1, "range.start should be ~20s, got " + ranges[0].start);
+  assert.ok(Math.abs(ranges[0].end - 35) < 0.1, "range.end should be ~35s, got " + ranges[0].end);
   console.log("  PASS: removedAdRanges — " + ranges.length + " range(s): " +
     ranges.map(function (r) { return "[" + r.start.toFixed(1) + "," + r.end.toFixed(1) + "]"; }).join(" "));
 }
@@ -162,7 +165,7 @@ function testMasterRewriting() {
     "#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=3190000,RESOLUTION=1920x1080",
     "3190kb/hls/index.m3u8?t=12345"
   ].join("\n");
-  var base = "https://bfikuncdn.com/20260115/mocDe1mI/index.m3u8";
+  var base = "https://cdn.test/20260115/ep/index.m3u8";
   var proxyBase = "http://127.0.0.1:3999/proxy";
   var out = filter.filterPlaylist(text, base, {
     rewriteUrl: function (u, opts) {
@@ -179,7 +182,32 @@ function testMasterRewriting() {
   console.log("  PASS: master playlist — variant URL rewritten to proxy");
 }
 
-// ── Test 6: the two filter copies are byte-identical ──
+// ── Test 6: EXT-X-KEY relative URI is rewritten to absolute ──
+
+function testKeyUriRewriting() {
+  var text = [
+    "#EXTM3U",
+    "#EXT-X-VERSION:3",
+    "#EXT-X-TARGETDURATION:4",
+    '#EXT-X-KEY:METHOD=AES-128,URI="enc.key",IV=0x00000000000000000000000000000000',
+    "#EXTINF:2.0,",
+    "https://cdn.test/20260115/ep/3190kb/hls/seg0.ts",
+    "#EXTINF:2.0,",
+    "https://cdn.test/20260115/ep/3190kb/hls/seg1.ts",
+    "#EXT-X-ENDLIST"
+  ].join("\n");
+  var base = "https://cdn.test/20260115/ep/3190kb/hls/index.m3u8";
+  var out = filter.filterPlaylist(text, base, {
+    rewriteUrl: function (u) { return u; }
+  });
+  var keyLine = out.split("\n").filter(function (l) { return l.indexOf("#EXT-X-KEY") === 0; })[0];
+  assert.ok(keyLine, "EXT-X-KEY line should be present");
+  assert.ok(keyLine.indexOf('URI="https://cdn.test/20260115/ep/3190kb/hls/enc.key"') !== -1,
+    'relative URI should be rewritten to absolute, got: ' + keyLine);
+  console.log("  PASS: EXT-X-KEY relative URI rewritten to absolute");
+}
+
+// ── Test 7: the two filter copies are byte-identical ──
 // m3u8AdFilter.js exists twice: here (sidecar, debug/control group) and in
 // service/com.cheerchen.decotv.service/ (production, on-device proxy). They
 // are plain copies — this test fails loudly when someone edits one and
@@ -198,11 +226,12 @@ function testCopiesInSync() {
 // ── Runner ──
 
 var tests = [
-  ["real playlist filtering", testRealPlaylistFiltering],
+  ["playlist filtering", testPlaylistFiltering],
   ["content-internal disc preserved", testContentInternalDiscPreserved],
   ["drift invariance", testDriftInvariance],
   ["removedAdRanges", testRemovedAdRanges],
   ["master playlist rewriting", testMasterRewriting],
+  ["EXT-X-KEY URI rewriting", testKeyUriRewriting],
   ["filter copies in sync", testCopiesInSync],
 ];
 

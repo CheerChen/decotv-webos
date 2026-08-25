@@ -15,3 +15,6 @@ Thumbs.db
 # Local notes (not published)
 docs/
 decotv-tmdb-sidecar/.env
+
+# Test fixtures — real CDN captures, not for repo
+decotv-tmdb-sidecar/test/fixtures/
