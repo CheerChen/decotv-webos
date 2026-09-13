@@ -3,7 +3,7 @@
 import { ScreenUtils } from "../../navigation/screen.js";
 import { formatTime, escapeHtml } from "../../utils.js";
 import { outroMarkerPercent } from "../../../core/playback/outroMark.js";
-import { episodeLabel, hasVersionLabels } from "../../../core/network/sourceRanking.js";
+import { episodeLabel } from "../../../core/network/sourceRanking.js";
 
 const SCRUB_HOLD_MS = 350;
 const ICONS = {
@@ -87,10 +87,8 @@ export class PlayerOsd {
     const title = this.getTitle() || "";
     const sourceName = this.getSourceName() || "";
     const src = this.getCurrentSource ? this.getCurrentSource() || {} : {};
-    const isVersions = hasVersionLabels(src);
-    const countWord = isVersions ? "版本" : "集";
     const epLabel = episodes.length > 1
-      ? `${episodeLabel(src, index)} / 共 ${episodes.length} ${countWord}`
+      ? `${episodeLabel(src, index)} / 共 ${episodes.length} 集`
       : "";
     const adCount = this.getFilteredAdCount ? this.getFilteredAdCount() : 0;
     const isProxied = this.getIsProxied ? this.getIsProxied() : false;

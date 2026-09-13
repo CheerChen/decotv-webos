@@ -632,7 +632,6 @@ export const DetailScreen = {
     }
     const eps = this.currentSource.episodes;
     const src = this.currentSource;
-    const isVersions = hasVersionLabels(src);
     const record = this._playRecord();
     const resumeIdx = record && Number(record.index) >= 1
       ? Math.min(Number(record.index) - 1, eps.length - 1)
@@ -640,11 +639,7 @@ export const DetailScreen = {
     head.style.display = "flex";
     const hint = this.container.querySelector("#episodesHint");
     if (hint) {
-      const countWord = isVersions ? "版本" : "集";
-      const resumeWord = isVersions
-        ? ` · 上次观看 ${episodeLabel(src, resumeIdx)}`
-        : ` · 上次看到第 ${resumeIdx + 1} 集`;
-      hint.textContent = `共 ${eps.length} ${countWord}${resumeIdx >= 0 ? resumeWord : ""}`;
+      hint.textContent = `共 ${eps.length} 集${resumeIdx >= 0 ? ` · 上次看到第 ${resumeIdx + 1} 集` : ""}`;
     }
     list.style.display = "grid";
     list.innerHTML = eps.map((_, i) => `
