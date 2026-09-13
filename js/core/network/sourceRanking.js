@@ -13,6 +13,11 @@ function comparePositiveLowerFirst(a, b) {
 // Parse a quality label like "1080p", "720p", "4K", "2160p", "未知" into a
 // numeric rank so higher resolution sorts first. Returns 0 when unparseable.
 // 4K / 2160p → 2160; 1080p → 1080; 720p → 720; 480p → 480; unknown → 0.
+//
+// This is a LABEL, and labels lie: a measured stream has been seen declaring
+// 1080x608 while carrying 1920x1080. It also cannot express the difference
+// that matters most (a 1920x608 letterboxed rip is not 1080p, yet its label
+// parses to 1920). Used only as a weak fallback below getMeasuredWidth.
 export function getQualityRank(result) {
   if (!result) return 0;
   const q = String(result.quality || "").trim();
@@ -27,6 +32,13 @@ export function getQualityRank(result) {
     if (n >= 240 && n <= 2160) return n;
   }
   return 0;
+}
+
+// The coded width read from the bitstream, or 0 when the stream could not be
+// measured. 0 must never be read as "low quality" — it means unknown.
+export function getMeasuredWidth(result) {
+  const w = Number(result?.measuredWidth);
+  return Number.isFinite(w) && w > 0 ? w : 0;
 }
 
 export function hasMeasuredMediaThroughput(result) {
@@ -70,6 +82,13 @@ export function comparePlaybackMetrics(a, b) {
   // Resolution first: a 1080p source beats a 480p source even if the 480p
   // one has higher throughput — on a TV, picture quality matters more than
   // raw speed as long as the stream is fast enough to sustain the resolution.
+  //
+  // Measured coded width outranks the upstream label: a stream the service
+  // actually read is evidence, a `RESOLUTION=` tag is a claim (one measured
+  // stream declared 1080x608 while carrying 1920x1080). A source whose read
+  // failed scores 0 here and keeps its label as the next tie-break.
+  const measuredDifference = getMeasuredWidth(b) - getMeasuredWidth(a);
+  if (measuredDifference !== 0) return measuredDifference;
   const qualityDifference = getQualityRank(b) - getQualityRank(a);
   if (qualityDifference !== 0) return qualityDifference;
   // Throughput: higher speed wins (can sustain higher bitrate).

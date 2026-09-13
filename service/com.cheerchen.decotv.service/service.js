@@ -774,6 +774,114 @@ var segmentProber = segmentProbe.createSegmentProber({
   fetchBytes: fetchUpstreamBytes
 });
 
+// ── Source resolution read ────────────────────────────────────────────────
+//
+// The app ranks sources by what they can actually serve, not by the
+// upstream's RESOLUTION label — one measured stream declared 1080x608 while
+// carrying 1920x1080, and the server-side probe's quality field only ever
+// echoes that label. The truth comes from the bitstream, which is what this
+// endpoint reads: master → best variant → one segment head → H.264 SPS.
+//
+// The variant with the highest declared resolution is measured, not the
+// first one: the app cannot steer the TV's ABR, so the useful question for
+// ranking is what the source CAN serve. The OSD's videoWidth x videoHeight
+// remains the ground truth for what actually rendered.
+
+// Highest declared RESOLUTION, then highest BANDWIDTH, then playlist order.
+function bestVariantFromMaster(text, baseUrl) {
+  var lines = String(text).split(/\r?\n/);
+  var best = null;
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (line.indexOf("#EXT-X-STREAM-INF:") !== 0) continue;
+    var j = i + 1;
+    while (j < lines.length && lines[j].trim() === "") j++;
+    if (j >= lines.length) continue;
+    var uri = lines[j].trim();
+    if (!uri || uri.charAt(0) === "#") continue;
+    var res = line.match(/RESOLUTION=(\d+)x(\d+)/i);
+    var bw = line.match(/BANDWIDTH=(\d+)/i);
+    var area = res ? Number(res[1]) * Number(res[2]) : 0;
+    var bandwidth = bw ? Number(bw[1]) : 0;
+    if (!best || area > best.area || (area === best.area && bandwidth > best.bandwidth)) {
+      best = { uri: uri, area: area, bandwidth: bandwidth };
+    }
+  }
+  return best ? resolveUrl(baseUrl, best.uri) : null;
+}
+
+// The longest group is the content: ad blocks are a minority of the duration,
+// and a head-inserted ad would otherwise be what the first segment measures.
+function longestGroup(groups) {
+  var best = null;
+  for (var i = 0; i < groups.length; i++) {
+    var g = groups[i];
+    if (!g.firstUrl || !(g.duration > 0)) continue;
+    if (!best || g.duration > best.duration) best = g;
+  }
+  return best || groups[0] || null;
+}
+
+function probeStreamResolution(playlistUrl, cb) {
+  var started = Date.now();
+  fetchUpstreamM3u8(playlistUrl, function (err, up) {
+    if (err || !up || up.status !== 200) {
+      cb(null, { ok: false, error: err ? String(err.message || err) : "upstream " + (up && up.status) });
+      return;
+    }
+    var mediaText = up.body;
+    var mediaUrl = up.finalUrl;
+    if (m3u8Filter.isMasterPlaylist(mediaText)) {
+      var variant = bestVariantFromMaster(mediaText, mediaUrl);
+      if (!variant) {
+        cb(null, { ok: false, error: "no variant" });
+        return;
+      }
+      fetchUpstreamM3u8(variant, function (err2, up2) {
+        if (err2 || !up2 || up2.status !== 200) {
+          cb(null, { ok: false, error: err2 ? String(err2.message || err2) : "variant " + (up2 && up2.status) });
+          return;
+        }
+        measureMediaPlaylist(up2.body, up2.finalUrl, started, cb);
+      });
+      return;
+    }
+    measureMediaPlaylist(mediaText, mediaUrl, started, cb);
+  });
+}
+
+function measureMediaPlaylist(text, finalUrl, started, cb) {
+  var analysis;
+  try { analysis = m3u8Filter.analyzeGroups(text, finalUrl); }
+  catch (e) { cb(null, { ok: false, error: "parse: " + (e.message || e) }); return; }
+  var group = longestGroup(analysis.groups);
+  if (!group) {
+    cb(null, { ok: false, error: "no segments" });
+    return;
+  }
+  segmentProber.measure(group, function (err, res) {
+    if (err || !res || !res.dims) {
+      cb(null, {
+        ok: false,
+        error: (err && (err.message || err)) || res && res.failure || "no sps",
+        groups: analysis.groups.length,
+        elapsedMs: Date.now() - started
+      });
+      return;
+    }
+    cb(null, {
+      ok: true,
+      w: res.dims.w,
+      h: res.dims.h,
+      level: res.dims.level,
+      groups: analysis.groups.length,
+      cached: Boolean(res.cached),
+      encrypted: Boolean(group.key),
+      elapsedMs: Date.now() - started
+    });
+  });
+}
+
 // Decide which groups to delete for a media playlist.
 //
 // The URL-signature rule is free, so the coded-signature probe only runs when
@@ -939,6 +1047,37 @@ var m3u8Server = http.createServer(function (req, res) {
           res.end("rewrite fail: " + (e.message || e));
         }
       });
+    });
+    return;
+  }
+
+  // Source resolution read. Answers 200 with { ok: false } for a stream that
+  // could not be measured, so the app can tell "measured nothing" from "no
+  // such endpoint" (a 404 means the service predates this feature).
+  if (parsed.pathname === "/probe") {
+    var probeTarget = parsed.searchParams.get("url");
+    if (!probeTarget) {
+      res.writeHead(400, { "Content-Type": "text/plain" });
+      res.end("missing url");
+      return;
+    }
+    probeStreamResolution(probeTarget, function (err, result) {
+      var body = result || { ok: false, error: err ? String(err.message || err) : "failed" };
+      if (body.ok) {
+        console.log("[m3u8-proxy] resolution " + JSON.stringify({
+          w: body.w,
+          h: body.h,
+          level: body.level,
+          groups: body.groups,
+          cached: Boolean(body.cached),
+          elapsedMs: body.elapsedMs
+        }));
+      }
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store"
+      });
+      res.end(JSON.stringify(body));
     });
     return;
   }

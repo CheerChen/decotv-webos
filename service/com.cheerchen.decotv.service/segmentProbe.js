@@ -371,6 +371,17 @@ function createSegmentProber(opts) {
 
   return {
     classify: classify,
+    // Measure one group's coded signature. Used by the source-resolution
+    // read, which wants the stream's real resolution rather than a verdict.
+    // Shares the segment and key caches with classify, so a source whose
+    // playlist the proxy already classified is measured for free.
+    measure: function (group, cb) {
+      fetchKey(group.key, function (key) {
+        probeGroup(group, key, function (res) {
+          cb(null, { dims: res.dims, cached: res.cached, failure: res.failure || null });
+        });
+      });
+    },
     clearCaches: function () {
       segments = {};
       keys = {};

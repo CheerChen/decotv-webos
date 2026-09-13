@@ -2,18 +2,33 @@
 
 import {
   comparePlaybackMetrics,
+  getMeasuredWidth,
   getQualityRank,
   getSourceProbeKey,
   isPlayableFallbackResult,
   isVerifiedPlaybackResult,
 } from "./sourceRanking.js";
+import { FULL_HD_WIDTH, isFullHdMeasured } from "../playback/streamResolution.js";
 
 export const PROBE_TIMEOUT_MS = 8000;
 export const PREFER_CONCURRENCY = 8;
 export const PREFER_MAX_WAIT_MS = 12000;
 export const PREFER_BACKGROUND_MAX_MS = 60000;
 export const PREFER_MIN_VERIFIED_FOR_AUTOPLAY = 4;
+// Start as soon as one source is MEASURED at full-HD coded width.
+export const PREFER_FULL_HD_WIDTH = FULL_HD_WIDTH;
+// Legacy label threshold, kept for sources nothing has measured: without the
+// service (dev preview, non-webOS, bind failure) no stream can be read, and a
+// label is all there ever was. A measured stream never falls back to this —
+// its width is the answer, even when the answer is "not full HD".
 export const PREFER_QUALITY_SHORTCUT_RANK = 1080;
+
+// Whether a probe result is good enough to start on immediately.
+export function hitsQualityShortcut(result, labelShortcutRank = PREFER_QUALITY_SHORTCUT_RANK) {
+  if (isFullHdMeasured(result)) return true;
+  if (getMeasuredWidth(result) > 0) return false;
+  return getQualityRank(result) >= labelShortcutRank;
+}
 
 let preferCache = null;
 
@@ -107,6 +122,7 @@ export async function runPreferEngine({
   episodeIndex = 0,
   searchVideos,
   probePlayback,
+  measureResolution = null,
   isStale = () => false,
   canAutoPlay = () => true,
   onSources,
@@ -158,6 +174,22 @@ export async function runPreferEngine({
     onPick?.({ source: best, sources, probeResults, reason });
   };
 
+  // Read the stream's real resolution through the injected reader. Skips the
+  // cases where there is provably nothing to read (no address, or a share
+  // page the server probe could not resolve into a stream) so a dead source
+  // does not cost an extra round trip.
+  const measureStream = async (probe, episodeUrl) => {
+    if (!measureResolution) return null;
+    if (probe?.failureKind === "empty" || probe?.mediaType === "page") return null;
+    const target = probe?.playbackUrl || probe?.resolvedUrl || episodeUrl;
+    if (!target) return null;
+    try {
+      return await measureResolution(target, controller.signal);
+    } catch (_) {
+      return null;
+    }
+  };
+
   const probeOne = async (source) => {
     const key = getSourceProbeKey(source);
     const episodeUrl = source.episodes?.[episodeIndex];
@@ -169,6 +201,18 @@ export async function runPreferEngine({
     try {
       const probe = await probePlayback(episodeUrl, source.source, probeTimeoutMs, controller.signal);
       if (isStale()) return { source, testResult: { stale: true } };
+      // Real coded resolution, read from the bitstream by the on-device
+      // service. Runs AFTER the server probe so no source is ever held back
+      // by it, and is attempted even when the server probe failed: a probe
+      // failure usually means the CDN rate-limited the probe, not that the
+      // stream is unplayable, and a measured width is the strongest ranking
+      // evidence available.
+      const measured = await measureStream(probe, episodeUrl);
+      if (isStale()) return { source, testResult: { stale: true } };
+      if (measured) {
+        probe.measuredWidth = measured.w;
+        probe.measuredHeight = measured.h;
+      }
       probeResults.set(key, probe);
       return { source, testResult: probe };
     } catch (error) {
@@ -195,7 +239,7 @@ export async function runPreferEngine({
         verifiedCount++;
       }
       if (isVerifiedPlaybackResult(result.testResult)
-        && getQualityRank(result.testResult) >= qualityShortcutRank) {
+        && hitsQualityShortcut(result.testResult, qualityShortcutRank)) {
         qualityShortcutHit = true;
       }
       onProgress?.({

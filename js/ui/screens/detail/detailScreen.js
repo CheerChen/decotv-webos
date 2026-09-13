@@ -21,6 +21,7 @@ import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigatio
 import { escapeHtml } from "../../utils.js";
 import { posterAttrs, hydratePosters } from "../../posterImage.js";
 import { renderProbeCell } from "../../probeLabel.js";
+import { readStreamResolution } from "../../../core/playback/streamResolution.js";
 import {
   getSourceProbeKey,
   rankSourcesByProbe,
@@ -511,6 +512,10 @@ export const DetailScreen = {
       existingProbeResults,
       searchVideos: (title) => this._searchAndShare(title),
       probePlayback: (...args) => api.probePlayback(...args),
+      // Real coded resolution from the bitstream, read by the on-device
+      // service. Returns null without the service (dev preview, non-webOS),
+      // and then every source keeps ranking on its upstream label.
+      measureResolution: (url, signal) => readStreamResolution(url, { signal }),
       isStale: () => epoch !== this._mountEpoch,
       canAutoPlay: () => !this.preferCancelled,
       onSources: ({ sources, probeResults }) => {

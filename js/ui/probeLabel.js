@@ -4,6 +4,7 @@ import {
   isPlayableFallbackResult,
   isVerifiedPlaybackResult,
 } from "../core/network/sourceRanking.js";
+import { measuredResolutionLabel } from "../core/playback/streamResolution.js";
 import { escapeHtml } from "./utils.js";
 
 export function probeLabel(result, {
@@ -27,10 +28,13 @@ export function probeLabel(result, {
       ? `${(result.speedKBps / 1024).toFixed(2)} MB/s`
       : (result.loadSpeed || "—");
     const ping = result.pingTime ? `${result.pingTime} ms` : missingPingText;
+    // Measured coded resolution when the service read one, otherwise the
+    // upstream label (which is what this row always showed before).
+    const resolution = measuredResolutionLabel(result) || result.quality || "—";
     return {
       className: "probe-ok",
       symbol: "✓",
-      text: `${result.quality || "—"} · ${speed} · ${ping}`,
+      text: `${resolution} · ${speed} · ${ping}`,
     };
   }
   return {
