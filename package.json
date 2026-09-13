@@ -4,7 +4,7 @@
     "type": "module",
     "version": "0.5.4",
     "scripts": {
-        "test": "node --test tests/*.test.* decotv-tmdb-sidecar/test/*.test.js",
+        "test": "node --test tests/*.test.*",
         "test:e2e": "playwright test -c tests/e2e/playwright.config.mjs"
     },
     "devDependencies": {

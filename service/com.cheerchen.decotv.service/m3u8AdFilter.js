@@ -3,7 +3,13 @@
 // m3u8AdFilter.js — pure playlist rewriter that strips dynamically-stitched
 // ad segments from an HLS playlist before the player ever sees them.
 //
-// Shared by the sidecar (/api/proxy/m3u8) and the on-device Luna JS service.
+// Used only by the on-device Luna JS service's m3u8 proxy. It had a second
+// copy in the TMDB sidecar as a debug/control-group double; that copy is gone
+// — it never ran in the container (the sidecar's Dockerfile copied server.js
+// only), so the "control" was really a local `node server.js`, and keeping a
+// duplicate in sync cost a byte-identity test and a rewrite of an unused file
+// on every change here.
+//
 // No network, no Express, no Node-specific APIs beyond URL — usable in any
 // CommonJS runtime (old webOS service Node included) and importable into ESM
 // via a thin wrapper if needed later.
