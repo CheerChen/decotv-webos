@@ -14,6 +14,7 @@ import {
   applyScanResult,
   markScanRunning,
   markScanFailed,
+  markProxyFiltered,
 } from "../../../core/playback/adSkipDetector.js";
 import { scanAdRanges, isHlsPlayUrl, isLocalProxyUrl } from "../../../core/playback/adSkipScanner.js";
 import { getM3u8ProxyPort, subscribeKeepalive } from "../../../core/network/lunaTransport.js";
@@ -136,14 +137,15 @@ export class PlaybackController {
     this._proxyFailed = false;
     this._directPlayUrl = playUrl;
     let effectiveUrl = playUrl;
+    let proxyPort = 0;
     if (isHlsPlayUrl(playUrl) && !isLocalProxyUrl(playUrl)) {
       const port = await getM3u8ProxyPort();
       if (token !== this.playToken) return;
       if (port) {
+        proxyPort = port;
         effectiveUrl = `http://127.0.0.1:${port}/proxy?url=${encodeURIComponent(playUrl)}`;
         this._proxiedForToken = token;
         this._startProxyKeepalive();
-        this._fetchFilteredAdCount(port, playUrl, token);
         console.info("[DecoTV] playing via m3u8 proxy", { port });
       } else {
         console.info("[DecoTV] m3u8 proxy unavailable, playing direct URL");
@@ -157,7 +159,7 @@ export class PlaybackController {
       playPromise.catch(() => { /* autoplay restriction — user must press play */ });
     }
     this.onMetaChange?.();
-    this._startAdScan(effectiveUrl, token);
+    this._beginAdSkip(effectiveUrl, token, proxyPort ? { port: proxyPort, target: playUrl } : null);
   }
 
   isDirectMediaUrl(url) {
@@ -253,24 +255,18 @@ export class PlaybackController {
     // by fetching the proxy's meta endpoint (returns removed ad ranges).
     const originalTime = this.video?.currentTime || 0;
     let resumeAt = originalTime;
-    try {
-      const metaUrl = `http://127.0.0.1:${port}/proxy?url=${encodeURIComponent(originalUrl)}&meta=1`;
-      const r = await fetch(metaUrl);
-      if (r.ok && token === this.playToken) {
-        const meta = await r.json();
-        const ranges = Array.isArray(meta.removedRanges) ? meta.removedRanges : [];
-        this._filteredAdCount = ranges.length;
-        this.onMetaChange?.();
-        // Subtract the overlap of each removed ad range with [0, originalTime].
-        let removed = 0;
-        for (const range of ranges) {
-          if (range.end <= originalTime) removed += range.end - range.start;
-          else if (range.start < originalTime) removed += originalTime - range.start;
-        }
-        resumeAt = Math.max(0, originalTime - removed);
+    let verdictComplete = false;
+    const meta = await this._fetchProxyMeta(port, originalUrl, token);
+    if (meta) {
+      const ranges = Array.isArray(meta.removedRanges) ? meta.removedRanges : [];
+      verdictComplete = Boolean(meta.verdictComplete);
+      // Subtract the overlap of each removed ad range with [0, originalTime].
+      let removed = 0;
+      for (const range of ranges) {
+        if (range.end <= originalTime) removed += range.end - range.start;
+        else if (range.start < originalTime) removed += originalTime - range.start;
       }
-    } catch (_) {
-      // Meta fetch failed — use originalTime as-is (slightly off but not fatal).
+      resumeAt = Math.max(0, originalTime - removed);
     }
     if (token !== this.playToken) return;
     const proxyUrl = `http://127.0.0.1:${port}/proxy?url=${encodeURIComponent(originalUrl)}`;
@@ -291,8 +287,13 @@ export class PlaybackController {
     this._proxiedForToken = token;
     this._directPlayUrl = originalUrl;
     this._startProxyKeepalive();
+    // The pre-scan that triggered this switch measured the ORIGINAL timeline,
+    // which just got shorter. A complete proxy verdict means the ads are gone
+    // from the new one, so those ranges must not be left armed: they would
+    // fire a seek at a position that now points into different content.
+    if (verdictComplete) this._setAdSkip(markProxyFiltered(this.adSkip || initialAdSkipState()));
     this.toast("已启用广告过滤代理", 2200);
-    console.info("[DecoTV] switched to m3u8 proxy", { port, originalTime, resumeAt });
+    console.info("[DecoTV] switched to m3u8 proxy", { port, originalTime, resumeAt, verdictComplete });
   }
 
   // Pin the dynamic service for the entire stream. webOS kills dynamic
@@ -312,18 +313,45 @@ export class PlaybackController {
     }
   }
 
-  // Async one-shot: ask the proxy how many ad groups it stripped, for the
-  // OSD shield badge. Fire-and-forget — failure just means no badge number.
-  _fetchFilteredAdCount(port, originalUrl, token) {
-    fetch(`http://127.0.0.1:${port}/proxy?url=${encodeURIComponent(originalUrl)}&meta=1`)
-      .then((r) => r.ok ? r.json() : null)
+  // Ask the proxy for this playlist's verdict. Two uses: the OSD shield
+  // count, and — when the proxy covered every group — the licence to skip
+  // the client's own pre-scan, which would otherwise repeat the same
+  // 512KB-per-group probes the proxy just paid for.
+  _fetchProxyMeta(port, originalUrl, token) {
+    const metaUrl = `http://127.0.0.1:${port}/proxy?url=${encodeURIComponent(originalUrl)}&meta=1`;
+    return fetch(metaUrl)
+      .then((r) => (r.ok ? r.json() : null))
       .then((meta) => {
-        if (token !== this.playToken) return;
-        const ranges = meta && Array.isArray(meta.removedRanges) ? meta.removedRanges : [];
+        if (!meta || token !== this.playToken) return null;
+        const ranges = Array.isArray(meta.removedRanges) ? meta.removedRanges : [];
         this._filteredAdCount = ranges.length;
         this.onMetaChange?.();
+        return meta;
       })
-      .catch(() => {});
+      .catch(() => null);
+  }
+
+  // Choose between the two ad-skip mechanisms for a stream that is already
+  // loading. The proxy is consulted first because it filters the playlist
+  // the player actually consumes; the pre-scan only runs when the proxy
+  // could not give a complete verdict (probe failed, budget ran out, or the
+  // proxy is unavailable), where the seek path is still the only defence.
+  _beginAdSkip(effectiveUrl, token, proxy) {
+    if (!proxy || !proxy.port) {
+      this._startAdScan(effectiveUrl, token);
+      return;
+    }
+    this._fetchProxyMeta(proxy.port, proxy.target, token).then((meta) => {
+      if (token !== this.playToken) return;
+      if (meta && meta.verdictComplete) {
+        this._setAdSkip(markProxyFiltered(this.adSkip || initialAdSkipState()));
+        console.info("[DecoTV] ad pre-scan skipped (proxy verdict complete)", {
+          filtered: this._filteredAdCount,
+        });
+        return;
+      }
+      this._startAdScan(effectiveUrl, token);
+    });
   }
 
   applyResume() {

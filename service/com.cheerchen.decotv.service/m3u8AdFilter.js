@@ -95,6 +95,47 @@ function groupSignature(urls) {
   return sig;
 }
 
+// Parse an #EXT-X-KEY tag into what the segment prober needs to decrypt a
+// probe window. METHOD=NONE clears the key. The key URI is resolved against
+// the PLAYLIST url, per HLS — resolving it against the segment host 404s on
+// real CDNs, since the key usually lives next to the playlist.
+function parseKeyTag(line, baseUrl) {
+  var methodMatch = line.match(/METHOD=([^,\s]+)/i);
+  if (!methodMatch) return null;
+  var method = methodMatch[1].toUpperCase();
+  if (method === "NONE") return null;
+  var uriMatch = line.match(/URI="([^"]*)"/i);
+  var ivMatch = line.match(/IV=0x([0-9A-Fa-f]+)/i);
+  return {
+    method: method,
+    uri: uriMatch ? resolveUrl(baseUrl, uriMatch[1]) : null,
+    ivHex: ivMatch ? ivMatch[1].toLowerCase() : null
+  };
+}
+
+// The playlist's EXT-X-MEDIA-SEQUENCE, which doubles as the default IV for
+// AES-128 when the key tag carries no explicit IV.
+function parseMediaSequence(text) {
+  var m = String(text).match(/#EXT-X-MEDIA-SEQUENCE:(\d+)/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+// Normalize an explicit ad-group selector (array of ordinals or an object
+// keyed by ordinal) into a lookup, or null when nothing was supplied.
+function indexLookup(value) {
+  if (!value) return null;
+  var lookup = {};
+  var found = false;
+  if (Array.isArray(value)) {
+    for (var i = 0; i < value.length; i++) { lookup[value[i]] = true; found = true; }
+  } else {
+    for (var key in value) {
+      if (value[key]) { lookup[key] = true; found = true; }
+    }
+  }
+  return found ? lookup : null;
+}
+
 // ── Media playlist rewrite ────────────────────────────────────────────────
 
 // Parse into a line model that preserves enough structure to rewrite in
@@ -108,6 +149,7 @@ function parseMediaLines(text, baseUrl) {
   // Build a structured list: header tags, discontinuity markers, segment
   // blocks (EXTINF lines + the url line that follows), and other tags.
   var items = [];
+  var activeKey = null; // last #EXT-X-KEY seen — applies to later segments
   var j = 0;
   while (j < lines.length) {
     var line = lines[j];
@@ -118,7 +160,7 @@ function parseMediaLines(text, baseUrl) {
     } else if (line.indexOf("#EXTINF:") === 0) {
       // EXTINF may be followed by more #EXT-X-* tags before the url line
       // (e.g. #EXT-X-BYTERANGE). Collect until the first non-tag line.
-      var block = { type: "seg", extinf: line, preTags: [], url: "", urlRaw: "" };
+      var block = { type: "seg", extinf: line, preTags: [], url: "", urlRaw: "", key: activeKey };
       j++;
       while (j < lines.length) {
         var nxt = lines[j];
@@ -131,6 +173,7 @@ function parseMediaLines(text, baseUrl) {
       }
       items.push(block);
     } else {
+      if (line.indexOf("#EXT-X-KEY") === 0) activeKey = parseKeyTag(line, baseUrl);
       items.push({ type: "tag", text: line });
       j++;
     }
@@ -139,11 +182,16 @@ function parseMediaLines(text, baseUrl) {
 }
 
 // Group items by discontinuity: each group is a run of segment blocks between
-// disc markers. Returns groups with their item-index range and signature.
-function buildGroups(items) {
+// disc markers. Returns groups with their item-index range, signature, and
+// the first segment's probe facts (absolute URL, media sequence number, and
+// the AES-128 key in force) — everything the request-time probe needs to
+// classify a group without re-parsing the playlist.
+function buildGroups(items, mediaSequence) {
+  var seqBase = mediaSequence || 0;
   var groups = [];
   var cur = null;
   var groupTimeOffset = 0;
+  var segOrdinal = 0;
   for (var i = 0; i < items.length; i++) {
     var it = items[i];
     if (it.type === "disc") {
@@ -152,7 +200,17 @@ function buildGroups(items) {
     }
     if (it.type === "seg") {
       if (!cur) {
-        cur = { startIdx: i, start: groupTimeOffset, segs: [], urls: [], duration: 0 };
+        cur = {
+          index: groups.length,
+          startIdx: i,
+          start: groupTimeOffset,
+          segs: [],
+          urls: [],
+          duration: 0,
+          firstUrl: it.url,
+          firstSeq: seqBase + segOrdinal,
+          key: it.key || null
+        };
         groups.push(cur);
       }
       cur.segs.push(i);
@@ -161,6 +219,7 @@ function buildGroups(items) {
       var d = m ? parseFloat(m[1]) : 0;
       cur.duration += d;
       groupTimeOffset += d;
+      segOrdinal += 1;
     }
   }
   // Attach signature
@@ -197,27 +256,37 @@ function majoritySignature(groups) {
 // opts.rewriteUrl(url, { kind: "segment" }) → string
 // opts.rewriteDisc === false to delete boundary discontinuities entirely
 //   (default: keep one — conservative, verified safe on webOS).
+// opts.adGroupIndices — group ordinals the caller classified as ads by some
+//   other means (the request-time coded-signature probe). Applied in
+//   addition to the URL-signature rule, and unlike that rule it works even
+//   when no majority signature exists — which is exactly the same-directory
+//   ad family the signature rule cannot see.
 function rewriteMediaPlaylist(text, baseUrl, opts) {
   opts = opts || {};
   var rewriteUrl = opts.rewriteUrl || function (u) { return u; };
   var keepDisc = opts.rewriteDisc !== false;
+  var explicit = indexLookup(opts.adGroupIndices);
   var items = parseMediaLines(text, baseUrl);
-  var groups = buildGroups(items);
+  var groups = buildGroups(items, parseMediaSequence(text));
   var baselineSig = majoritySignature(groups);
 
-  // If no usable majority signature, the playlist has no detectable ad
-  // insertion by this heuristic — return with URLs rewritten only.
-  if (baselineSig === null) {
+  // Nothing to act on: no usable majority signature and no probe verdict.
+  // Return with URLs rewritten only.
+  if (baselineSig === null && !explicit) {
     return emitMedia(items, rewriteUrl, baseUrl);
   }
 
   // Mark which item indices belong to ad groups.
   var adItems = {};
+  var markGroup = function (grp) {
+    for (var s = 0; s < grp.segs.length; s++) adItems[grp.segs[s]] = true;
+  };
   for (var g = 0; g < groups.length; g++) {
     var grp = groups[g];
-    if (grp.sig !== null && grp.sig !== baselineSig) {
-      for (var s = 0; s < grp.segs.length; s++) adItems[grp.segs[s]] = true;
+    if (baselineSig !== null && grp.sig !== null && grp.sig !== baselineSig) {
+      markGroup(grp);
     }
+    if (explicit && explicit[grp.index]) markGroup(grp);
   }
 
   // Walk items, dropping ad segments. At each content→ad→content transition
@@ -349,30 +418,62 @@ function filterPlaylist(text, baseUrl, opts) {
 // position from the original timeline to the filtered timeline:
 //   filteredTime = originalTime - sum(overlap of each ad range with [0, originalTime])
 //
-// Returns [] for master playlists or when no majority signature is found.
-function removedAdRanges(text, baseUrl) {
+// opts.adGroupIndices must be the SAME selector passed to filterPlaylist, or
+// the mapping and the rewritten playlist disagree about what was removed.
+//
+// Returns [] for master playlists or when nothing is removable.
+function removedAdRanges(text, baseUrl, opts) {
+  opts = opts || {};
   if (isMasterPlaylist(text)) return [];
+  var explicit = indexLookup(opts.adGroupIndices);
   var items = parseMediaLines(text, baseUrl);
-  var groups = buildGroups(items);
+  var groups = buildGroups(items, parseMediaSequence(text));
   var baselineSig = majoritySignature(groups);
-  if (baselineSig === null) return [];
+  if (baselineSig === null && !explicit) return [];
   var ranges = [];
   for (var g = 0; g < groups.length; g++) {
     var grp = groups[g];
-    if (grp.sig !== null && grp.sig !== baselineSig && grp.duration > 0) {
+    var isAd = (baselineSig !== null && grp.sig !== null && grp.sig !== baselineSig)
+      || (explicit && explicit[grp.index]);
+    if (isAd && grp.duration > 0) {
       ranges.push({ start: grp.start, end: grp.start + grp.duration });
     }
   }
   return ranges;
 }
 
+// Group analysis for the request-time probe. Pure — no network. The proxy
+// reads the group list, probes the groups whose coded signature it needs,
+// and hands the verdict back in as opts.adGroupIndices. Grouping, group
+// signatures and the majority rule live here so the signature path and the
+// probe path can never drift apart.
+//
+// Returns { groups, baselineSig, mediaSequence } where each group carries
+// its ordinal, timeline range, item indices, first segment URL / media
+// sequence number / AES key, and URL signature.
+function analyzeGroups(text, baseUrl) {
+  if (isMasterPlaylist(text)) {
+    return { groups: [], baselineSig: null, mediaSequence: 0 };
+  }
+  var mediaSequence = parseMediaSequence(text);
+  var groups = buildGroups(parseMediaLines(text, baseUrl), mediaSequence);
+  return {
+    groups: groups,
+    baselineSig: majoritySignature(groups),
+    mediaSequence: mediaSequence
+  };
+}
+
 module.exports = {
   filterPlaylist: filterPlaylist,
   removedAdRanges: removedAdRanges,
+  analyzeGroups: analyzeGroups,
   rewriteMediaPlaylist: rewriteMediaPlaylist,
   rewriteMasterPlaylist: rewriteMasterPlaylist,
   isMasterPlaylist: isMasterPlaylist,
   urlSignature: urlSignature,
   groupSignature: groupSignature,
   majoritySignature: majoritySignature,
+  parseKeyTag: parseKeyTag,
+  parseMediaSequence: parseMediaSequence,
 };

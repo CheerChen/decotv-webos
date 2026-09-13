@@ -16,6 +16,7 @@ var ImageCache = require("./imageCache").ImageCache;
 var ImagePipeline = require("./imagePipeline").ImagePipeline;
 var DoubanCache = require("./doubanCache").DoubanCache;
 var m3u8Filter = require("./m3u8AdFilter.js");
+var segmentProbe = require("./segmentProbe.js");
 
 var SERVICE_ID = "com.cheerchen.decotv.service";
 // The cookie jar lives INSIDE the service's install directory on purpose: its
@@ -702,6 +703,137 @@ function fetchUpstreamM3u8(targetUrl, cb) {
   req.end();
 }
 
+// ── Segment probe plumbing ────────────────────────────────────────────────
+//
+// Byte-range GET for the coded-signature probe. A CDN that ignores Range
+// would otherwise stream a whole 2-6s segment (1-3MB) per probed group, so
+// the response is cut off as soon as enough bytes are in hand.
+var M3U8_PROBE_TIMEOUT_MS = 5000;
+
+function fetchUpstreamBytes(targetUrl, maxBytes, cb, depth) {
+  var hops = depth || 0;
+  if (hops > 3) { cb(new Error("too many redirects")); return; }
+  var target;
+  try { target = new URLCtor(targetUrl); }
+  catch (e) { cb(e); return; }
+  var client = target.protocol === "https:" ? https : http;
+  var agent = target.protocol === "https:" ? httpsAgent : httpAgent;
+  var chunks = [];
+  var got = 0;
+  var settled = false;
+  var settle = function (err, buf) {
+    if (settled) return;
+    settled = true;
+    cb(err, buf);
+  };
+  var req = client.request({
+    protocol: target.protocol,
+    hostname: target.hostname,
+    port: target.port || (target.protocol === "https:" ? 443 : 80),
+    method: "GET",
+    path: target.pathname + target.search,
+    headers: {
+      "User-Agent": M3U8_PROXY_UA,
+      "Accept": "*/*",
+      "Range": "bytes=0-" + (maxBytes - 1)
+    },
+    agent: agent
+  }, function (res) {
+    if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+      res.resume();
+      fetchUpstreamBytes(new URLCtor(res.headers.location, targetUrl).href, maxBytes, cb, hops + 1);
+      return;
+    }
+    if (res.statusCode !== 200 && res.statusCode !== 206) {
+      res.resume();
+      settle(new Error("HTTP " + res.statusCode));
+      return;
+    }
+    res.on("data", function (chunk) {
+      if (settled) return;
+      chunks.push(chunk);
+      got += chunk.length;
+      if (got >= maxBytes) {
+        settle(null, Buffer.concat(chunks).subarray(0, maxBytes));
+        try { req.destroy(); } catch (_) {}
+      }
+    });
+    res.on("end", function () {
+      settle(null, Buffer.concat(chunks).subarray(0, maxBytes));
+    });
+    res.on("error", function (e) { settle(e); });
+  });
+  req.setTimeout(M3U8_PROBE_TIMEOUT_MS, function () {
+    req.destroy(new Error("probe timeout"));
+  });
+  req.on("error", function (e) { settle(e); });
+  req.end();
+}
+
+var segmentProber = segmentProbe.createSegmentProber({
+  fetchBytes: fetchUpstreamBytes
+});
+
+// Decide which groups to delete for a media playlist.
+//
+// The URL-signature rule is free, so the coded-signature probe only runs when
+// that rule cannot see the playlist's ad blocks at all: no group deviates
+// from the majority signature (the same-directory family), or there is no
+// majority signature to compare against. Otherwise the answer would not
+// change and the probe would only add latency to the player's playlist fetch.
+//
+// The verdict also reports whether it COVERED every group of the playlist
+// (verdictComplete). The app uses that to skip its own background pre-scan:
+// when the proxy classified every group, the client's scan could only repeat
+// the same 512KB-per-group probes.
+//
+// Never throws and never blocks the response: on any failure the caller gets
+// an empty, explicitly incomplete verdict and the playlist is filtered by
+// signature alone.
+function classifyAdGroups(text, finalUrl, cb) {
+  var analysis;
+  try { analysis = m3u8Filter.analyzeGroups(text, finalUrl); }
+  catch (e) {
+    console.log("[m3u8-proxy] group analysis failed: " + (e.message || e));
+    cb(null, { adGroupIndices: [], verdictComplete: false });
+    return;
+  }
+  if (!segmentProbe.needsProbe(analysis)) {
+    // The signature rule decides every group on its own — complete, no probe.
+    cb(analysis, { adGroupIndices: [], verdictComplete: true, probeRan: false });
+    return;
+  }
+
+  segmentProber.classify(analysis, function (err, verdict) {
+    if (err) {
+      console.log("[m3u8-proxy] probe failed: " + (err.message || err));
+      cb(analysis, { adGroupIndices: [], verdictComplete: false });
+      return;
+    }
+    var complete = verdict.failed === 0
+      && !verdict.unprobed
+      && !verdict.budgetExceeded;
+    if (verdict.adGroupIndices.length || verdict.failed || verdict.budgetExceeded) {
+      console.log("[m3u8-proxy] probe " + JSON.stringify({
+        groups: analysis.groups.length,
+        probed: verdict.probed,
+        failed: verdict.failed,
+        unprobed: verdict.unprobed || 0,
+        ads: verdict.adGroupIndices.length,
+        encrypted: Boolean(verdict.encrypted),
+        budgetExceeded: Boolean(verdict.budgetExceeded),
+        baseline: verdict.baseline,
+        elapsedMs: verdict.elapsedMs
+      }));
+    }
+    cb(analysis, {
+      adGroupIndices: verdict.adGroupIndices,
+      verdictComplete: complete,
+      probeRan: true
+    });
+  });
+}
+
 var m3u8Server = http.createServer(function (req, res) {
   // CORS — the webview is file://, every request here is cross-origin.
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -740,47 +872,48 @@ var m3u8Server = http.createServer(function (req, res) {
       // and return its removed ranges so the caller gets a useful answer
       // from a single request.
       if (wantMeta) {
-        try {
-          var ranges;
-          if (m3u8Filter.isMasterPlaylist(up.body)) {
-            // Extract first variant URL and fetch it.
-            var variantUrl = firstVariantFromMaster(up.body, up.finalUrl);
-            if (variantUrl) {
-              fetchUpstreamM3u8(variantUrl, function (e2, up2) {
-                if (e2 || !up2 || up2.status !== 200) {
-                  res.writeHead(200, {
-                    "Content-Type": "application/json",
-                    "Cache-Control": "no-store"
-                  });
-                  res.end(JSON.stringify({ removedRanges: [] }));
-                  return;
-                }
-                try {
-                  ranges = m3u8Filter.removedAdRanges(up2.body, up2.finalUrl);
-                } catch (_) { ranges = []; }
-                res.writeHead(200, {
-                  "Content-Type": "application/json",
-                  "Cache-Control": "no-store"
-                });
-                res.end(JSON.stringify({ removedRanges: ranges }));
+        var respondRanges = function (body, url) {
+          classifyAdGroups(body, url, function (analysis, verdict) {
+            var ranges = [];
+            try {
+              ranges = m3u8Filter.removedAdRanges(body, url, {
+                adGroupIndices: verdict.adGroupIndices
               });
-            } else {
-              ranges = [];
-            }
-          } else {
-            ranges = m3u8Filter.removedAdRanges(up.body, up.finalUrl);
-          }
-          if (ranges !== undefined) {
+            } catch (_) { ranges = []; }
             res.writeHead(200, {
               "Content-Type": "application/json",
               "Cache-Control": "no-store"
             });
-            res.end(JSON.stringify({ removedRanges: ranges }));
+            res.end(JSON.stringify({
+              removedRanges: ranges,
+              verdictComplete: Boolean(verdict.verdictComplete)
+            }));
+          });
+        };
+        if (m3u8Filter.isMasterPlaylist(up.body)) {
+          var variantUrl = firstVariantFromMaster(up.body, up.finalUrl);
+          if (!variantUrl) {
+            res.writeHead(200, {
+              "Content-Type": "application/json",
+              "Cache-Control": "no-store"
+            });
+            res.end(JSON.stringify({ removedRanges: [], verdictComplete: false }));
+            return;
           }
-        } catch (e) {
-          res.writeHead(500, { "Content-Type": "text/plain" });
-          res.end("meta fail: " + (e.message || e));
+          fetchUpstreamM3u8(variantUrl, function (e2, up2) {
+            if (e2 || !up2 || up2.status !== 200) {
+              res.writeHead(200, {
+                "Content-Type": "application/json",
+                "Cache-Control": "no-store"
+              });
+              res.end(JSON.stringify({ removedRanges: [], verdictComplete: false }));
+              return;
+            }
+            respondRanges(up2.body, up2.finalUrl);
+          });
+          return;
         }
+        respondRanges(up.body, up.finalUrl);
         return;
       }
       var proxyBase = "http://127.0.0.1:" + m3u8ProxyPort + "/proxy";
@@ -790,17 +923,22 @@ var m3u8Server = http.createServer(function (req, res) {
         }
         return u; // segments direct
       };
-      try {
-        var rewritten = m3u8Filter.filterPlaylist(up.body, up.finalUrl, { rewriteUrl: rewriteUrl });
-        res.writeHead(200, {
-          "Content-Type": "application/vnd.apple.mpegurl",
-          "Cache-Control": "no-store"
-        });
-        res.end(rewritten);
-      } catch (e) {
-        res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("rewrite fail: " + (e.message || e));
-      }
+      classifyAdGroups(up.body, up.finalUrl, function (analysis, verdict) {
+        try {
+          var rewritten = m3u8Filter.filterPlaylist(up.body, up.finalUrl, {
+            rewriteUrl: rewriteUrl,
+            adGroupIndices: verdict.adGroupIndices
+          });
+          res.writeHead(200, {
+            "Content-Type": "application/vnd.apple.mpegurl",
+            "Cache-Control": "no-store"
+          });
+          res.end(rewritten);
+        } catch (e) {
+          res.writeHead(500, { "Content-Type": "text/plain" });
+          res.end("rewrite fail: " + (e.message || e));
+        }
+      });
     });
     return;
   }

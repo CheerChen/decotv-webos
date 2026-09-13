@@ -25,6 +25,9 @@ export function initialAdSkipState() {
     jumped: {}, // index -> true
     scanElapsedMs: 0,
     dynamicStitched: false, // source re-randomizes ad positions per request
+    // The proxy classified every group of the playlist the player is
+    // consuming, so no ad segment is left in the timeline it can see.
+    proxiedFiltered: false,
     // Live fallback (only when ranges empty after scan settles)
     baselineW: 0,
     baselineH: 0,
@@ -83,6 +86,15 @@ export function markScanFailed(state) {
   return { ...state, scanStatus: "failed" };
 }
 
+// The proxy reported a verdict that covered every group of the playlist, so
+// the ad segments are already gone from the timeline the player is reading.
+// Marking it stops both skip mechanisms: a seek would have nothing to skip,
+// and the live resolution fallback would only fire on legitimate encoder
+// changes (the strict rule is deliberately blind to what distinguishes them).
+export function markProxyFiltered(state) {
+  return { ...state, scanStatus: "done", ranges: [], jumped: {}, proxiedFiltered: true };
+}
+
 /**
  * @returns {{
  *   state: ReturnType<typeof initialAdSkipState>,
@@ -102,6 +114,10 @@ export function observeAdSkip(state, sample) {
     return { state: next, action: null };
   }
   if (seeking) return { state: next, action: null };
+
+  // Proxy verdict covered the whole playlist — the timeline holds no ad
+  // segments, so neither the pre-scanned ranges nor the live fallback apply.
+  if (next.proxiedFiltered) return { state: next, action: null };
 
   // --- Primary: pre-scanned ranges (one seek per range) ---
   if (next.ranges.length) {

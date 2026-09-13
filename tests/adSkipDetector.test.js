@@ -9,6 +9,7 @@ import {
   observeAdSkip,
   applyScanResult,
   markScanRunning,
+  markProxyFiltered,
   BASELINE_STABLE_SAMPLES,
   MIN_BASELINE_TIME_S,
   SKIP_STEP_S
@@ -114,6 +115,33 @@ describe("pre-scan range skip", () => {
       baseline: { w: 1920, h: 1080 }
     });
     const r = observeAdSkip(s, sample({ currentTime: 400 }));
+    assert.equal(r.action, null);
+  });
+});
+
+describe("proxy filtered the playlist", () => {
+  it("marks the state done and disarms both mechanisms", () => {
+    const s = markProxyFiltered(initialAdSkipState());
+    assert.equal(s.scanStatus, "done");
+    assert.equal(s.proxiedFiltered, true);
+    assert.deepEqual(s.ranges, []);
+  });
+
+  it("does not step-seek on a resolution change the live fallback would chase", () => {
+    // The live fallback would fire on this sample (see the test above); with
+    // the proxy's verdict in hand it must stay quiet, because a resolution
+    // change in a playlist with no ad segments left is a legitimate encoder
+    // switch, not an ad.
+    let s = markProxyFiltered(initialAdSkipState());
+    s = { ...s, locked: true, baselineW: 1920, baselineH: 1080 };
+    const r = observeAdSkip(s, sample({ w: 848, h: 640, currentTime: 496, now: 2_000_000 }));
+    assert.equal(r.action, null);
+  });
+
+  it("does not seek even if ranges were left armed", () => {
+    const s = markProxyFiltered(initialAdSkipState());
+    const armed = { ...s, ranges: [{ start: 100, end: 160 }] };
+    const r = observeAdSkip(armed, sample({ currentTime: 100.2 }));
     assert.equal(r.action, null);
   });
 });
