@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import {
   filterSearchSources,
   normalizeTitle,
+  retryQueries,
   matchesYear,
   inferSearchType,
   runPreferEngine,
@@ -38,6 +39,118 @@ describe("prefer source filtering", () => {
   test("relaxes only the type constraint when every strict match is absent", () => {
     const results = [source("one", ["a"]), { ...source("wrong-year", ["a"]), year: "2023" }];
     assert.deepEqual(filterSearchSources(results, "测试剧集", "2024").map((r) => r.id), ["one"]);
+  });
+});
+
+// Search-hit shape without episodes: no episode-count type is inferred, so
+// these cases exercise the title/year ladder alone (ported from the Android
+// TV client's SearchSourceFilterTest, same live-search shapes).
+const hit = (title, year, id) => ({ id, source: id, title, year });
+const ids = (list) => list.map((r) => r.id);
+
+describe("prefer title/year ladder", () => {
+  test("title match ignores punctuation and HTML escapes", () => {
+    const results = [
+      hit("某系列外传季&amp;怪物季", "2024", "escaped"),
+      hit("某系列 外传季 怪物季", "2024", "spaced"),
+      hit("某系列：外传季・怪物季", "2024", "fullwidth"),
+      hit("某系列第二季", "2013", "other"),
+    ];
+    assert.deepEqual(ids(filterSearchSources(results, "某系列 外传季&怪物季", "2024")),
+      ["escaped", "spaced", "fullwidth"]);
+    // Full-width folds to half-width, numeric entities decode, punctuation drops.
+    assert.equal(normalizeTitle("Ｆｏｏ&amp;Bar&#x41;：２"), "foobara2");
+  });
+
+  test("same title with the wrong year loses to a year-consistent season entry", () => {
+    const results = [
+      hit("某剧集", "2020", "filmA"),
+      hit("某剧集 特别篇", "2020", "filmB"),
+      hit("某剧集 第一季", "2008", "s1"),
+      hit("某剧集 第一季", "2008", "s2"),
+    ];
+    assert.deepEqual(ids(filterSearchSources(results, "某剧集", "2008")), ["s1", "s2"]);
+  });
+
+  test("blank-year entries join the year-ok bucket", () => {
+    const results = [hit("某影片", "", "blank"), hit("某影片", "2011", "real")];
+    assert.deepEqual(ids(filterSearchSources(results, "某影片", "2011")), ["blank", "real"]);
+  });
+
+  test("a same title from another year is not a match", () => {
+    assert.deepEqual(ids(filterSearchSources([hit("某旧片", "2003", "old")], "某旧片", "1999")), []);
+  });
+
+  test("title-prefixed entry with the right year when the exact title is absent", () => {
+    const results = [hit("某边境剧 第一季", "2019", "season1"), hit("某边境剧 电影之终局", "2021", "film")];
+    assert.deepEqual(ids(filterSearchSources(results, "某边境剧", "2019")), ["season1"]);
+  });
+
+  test("a title inside an unrelated work's title is not a match", () => {
+    // Live search shape (2026-10): a short title only appears inside another work.
+    const results = [hit("前缀某名 副题", "2026", "other"), hit("某名后缀", "2026", "prefixed")];
+    assert.deepEqual(ids(filterSearchSources(results, "某名", "2026")), ["prefixed"]);
+    assert.deepEqual(ids(filterSearchSources([hit("前缀某名 副题", "2026", "other")], "某名", "2026")), []);
+  });
+
+  test("seasons from other years are not pulled in", () => {
+    const results = [
+      hit("某系列 外传季", "2024", "s5"),
+      hit("某系列第二季", "2013", "s2"),
+      hit("某系列 终季", "2017", "s4"),
+    ];
+    assert.deepEqual(ids(filterSearchSources(results, "某系列", "2009")), []);
+  });
+
+  test("reordered words match when the year agrees", () => {
+    const results = [
+      hit("某冒险副题", "2026", "joined"),
+      hit("某冒险 副题", "2026", "spaced"),
+      hit("某冒险 另一部", "2021", "other"),
+      hit("某冒险副题", "2012", "wrong-year"),
+    ];
+    assert.deepEqual(ids(filterSearchSources(results, "副题 某冒险 第二&第三赛段", "2026")), ["joined", "spaced"]);
+  });
+
+  test("reordered words need a year and two words", () => {
+    const results = [hit("某冒险副题", "2026", "a")];
+    assert.deepEqual(ids(filterSearchSources(results, "副题 某冒险", "")), []);
+    assert.deepEqual(ids(filterSearchSources(results, "副题 第二季", "2026")), []);
+  });
+
+  test("retry queries join, then shorten a spaced title", () => {
+    assert.deepEqual(retryQueries("某系列 第二季"), ["某系列第二季", "某系列"]);
+    assert.deepEqual(retryQueries("某系列第二季"), []);
+    // A one-character head is no query of its own.
+    assert.deepEqual(retryQueries("X 某片"), ["X某片"]);
+  });
+
+  test("the engine retries joined, then head queries, filtering on the full title", async () => {
+    const queries = [];
+    const byQuery = {
+      "某系列 第二季": [hit("无关", "2020", "noise")],
+      "某系列第二季": [],
+      "某系列": [hit("某系列第二季", "2015", "s2"), hit("某系列", "2013", "s1")],
+    };
+    const outcome = await runPreferEngine({
+      title: "某系列 第二季",
+      year: "2015",
+      searchVideos: async (q) => { queries.push(q); return { results: byQuery[q] || [] }; },
+      probePlayback: async () => ({ hasError: true }),
+    });
+    assert.deepEqual(queries, ["某系列 第二季", "某系列第二季", "某系列"]);
+    assert.deepEqual(ids(outcome.sources), ["s2"]);
+  });
+
+  test("the engine stops at the first query that matches", async () => {
+    const queries = [];
+    await runPreferEngine({
+      title: "某系列 第二季",
+      year: "",
+      searchVideos: async (q) => { queries.push(q); return { results: [hit("某系列 第二季", "", "x")] }; },
+      probePlayback: async () => ({ hasError: true }),
+    });
+    assert.deepEqual(queries, ["某系列 第二季"]);
   });
 });
 

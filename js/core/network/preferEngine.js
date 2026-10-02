@@ -55,8 +55,28 @@ export function clearPreferCache() {
   preferCache = null;
 }
 
+// Title identity for matching: letters and digits only. Resource sites spell
+// one catalog title HTML-escaped ("&amp;"), bare ("&") or with no punctuation
+// at all, in full-width or half-width forms; spaces-only stripping missed
+// every one of those and the page showed no sources.
+const HTML_ENTITY = /&(#x[0-9a-fA-F]{1,6}|#[0-9]{1,7}|[a-zA-Z]{2,8});/g;
+
+function decodeEntity(_, body) {
+  let code = NaN;
+  if (/^#x/i.test(body)) code = parseInt(body.slice(2), 16);
+  else if (body.charAt(0) === "#") code = parseInt(body.slice(1), 10);
+  // Named entities in titles are punctuation (&amp; &middot; &nbsp; ...),
+  // which is dropped below anyway.
+  if (!Number.isFinite(code) || code < 0 || code > 0x10ffff) return "";
+  return String.fromCodePoint(code);
+}
+
 export function normalizeTitle(s) {
-  return String(s || "").replaceAll(" ", "").toLowerCase();
+  return String(s || "")
+    .replace(HTML_ENTITY, decodeEntity)
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N}]/gu, "")
+    .toLowerCase();
 }
 
 export function matchesYear(candidateYear, requestedYear) {
@@ -71,21 +91,86 @@ export function inferSearchType(episodes) {
   return episodes.length > 1 ? "tv" : "movie";
 }
 
+// Season / part words a catalog appends that the sites write elsewhere or
+// not at all: "第二季", "第二&第三赛段", "外传篇", "Part.2", "Season 3",
+// "2nd Season".
+const SEASON_WORD = /^((第.+(季|期|部|章|篇|赛段|クール))|(.+(篇|赛段))|(part\.?\s*\d+)|(season\s*\d+)|(\d+(st|nd|rd|th)(season)?))$/i;
+
+function yearOf(value) {
+  const m = String(value || "").trim().slice(0, 4);
+  return /^\d{4}$/.test(m) ? Number(m) : null;
+}
+
+// The last rung: every word of the title in the result's title, in any
+// order, season words set aside, and the same year. Catalogs (Bangumi) list
+// "<副题> <题名> 第二&第三赛段" where the sites list "<题名><副题>". Looser than
+// the rungs above, so the year must agree and a one-word title has nothing
+// to reorder.
+function byWords(results, title, year) {
+  const target = yearOf(year);
+  if (target === null) return [];
+  const words = String(title || "").trim().split(/\s+/)
+    .filter((w) => !SEASON_WORD.test(w))
+    .map(normalizeTitle)
+    .filter(Boolean);
+  if (words.length < 2) return [];
+  return results.filter((r) => {
+    const t = normalizeTitle(r.title);
+    return yearOf(r.year) === target && words.every((w) => t.includes(w));
+  });
+}
+
+// Title/year strictness ladder, first non-empty rung wins:
+//   exact title + year → title-prefixed + year → reordered words + year.
+// Every rung requires the year to agree (blank years on either side pass).
+// There is deliberately no any-year rung: a same-title entry from another
+// year is another work far more often than a mis-dated listing (live
+// search, 2026-10: a film's title matched a same-named short series from
+// two years earlier), and playing the wrong work is worse than "no source".
+//
+// Within the winning rung the episode-count type inferred from the first
+// raw hit is preferred (tv: >1 episode, movie: exactly 1); when no source
+// in the rung satisfies it, the rung is returned as is.
 export function filterSearchSources(results, title, year) {
   const all = Array.isArray(results) ? results : [];
   const searchType = all.length ? inferSearchType(all[0].episodes) : null;
-  const matches = (source, enforceType) => {
-    if (normalizeTitle(source.title) !== normalizeTitle(title)) return false;
-    if (!matchesYear(source.year, year)) return false;
-    if (!enforceType || !searchType) return true;
+  const want = normalizeTitle(title);
+  const yearOk = (source) => matchesYear(source.year, year);
+  const byExact = want ? all.filter((r) => normalizeTitle(r.title) === want) : [];
+  // Prefix, not substring: the rung exists for "<题名> 第N季" listings, where
+  // the title always leads. A substring match let a short title reach an
+  // unrelated work that merely contains it (live search, 2026-10: a
+  // two-character title matched 56 sources of an unrelated series whose
+  // title contained those two characters, where the title itself had none).
+  const byPrefix = want ? all.filter((r) => normalizeTitle(r.title).startsWith(want)) : [];
+
+  let rung = byExact.filter(yearOk);
+  if (!rung.length) rung = byPrefix.filter(yearOk);
+  if (!rung.length) rung = byWords(all, title, year);
+
+  if (!searchType) return rung;
+  const typed = rung.filter((source) => {
     const episodeCount = Array.isArray(source.episodes) ? source.episodes.length : 0;
-    if (searchType === "tv" && episodeCount <= 1) return false;
-    if (searchType === "movie" && episodeCount !== 1) return false;
-    return true;
-  };
-  return all.filter((source) => matches(source, true)).length
-    ? all.filter((source) => matches(source, true))
-    : all.filter((source) => matches(source, false));
+    return searchType === "tv" ? episodeCount > 1 : episodeCount === 1;
+  });
+  return typed.length ? typed : rung;
+}
+
+// Search queries to try, in order, when the title itself finds nothing: the
+// title with its spaces removed, then its part before the first space.
+// Resource sites split a spaced query and match its parts loosely —
+// "<题名> 第二季" returned a thousand unrelated hits while "<题名>第二季"
+// returned the season. Results are still filtered against the full title,
+// so a shorter query only widens what is fetched, not what matches.
+const MIN_QUERY_CODE_POINTS = 2;
+
+export function retryQueries(title) {
+  const trimmed = String(title || "").trim();
+  if (!/\s/.test(trimmed)) return [];
+  const joined = trimmed.replace(/\s+/g, "");
+  const head = trimmed.split(/\s/)[0].trim();
+  return [...new Set([joined, head])]
+    .filter((q) => [...q].length >= MIN_QUERY_CODE_POINTS);
 }
 
 export function pickBestPreferSource(sources, probeResults, candidates = null) {
@@ -136,10 +221,15 @@ export async function runPreferEngine({
   minVerifiedForAutoplay = PREFER_MIN_VERIFIED_FOR_AUTOPLAY,
   qualityShortcutRank = PREFER_QUALITY_SHORTCUT_RANK,
 } = {}) {
-  const data = initialSources ? null : await searchVideos(title);
-  const sources = Array.isArray(initialSources)
-    ? initialSources
-    : filterSearchSources(data?.results, title, year);
+  let sources = Array.isArray(initialSources) ? initialSources : [];
+  if (!Array.isArray(initialSources)) {
+    for (const query of [title, ...retryQueries(title)]) {
+      const data = await searchVideos(query);
+      if (isStale()) break;
+      sources = filterSearchSources(data?.results, title, year);
+      if (sources.length) break;
+    }
+  }
   const probeResults = new Map(existingProbeResults instanceof Map ? existingProbeResults : []);
   if (isStale()) return { sources, probeResults, best: null, autoPlayFired: false, stale: true };
   onSources?.({ sources, probeResults });
