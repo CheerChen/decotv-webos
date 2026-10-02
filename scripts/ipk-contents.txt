@@ -59,6 +59,8 @@ service/com.cheerchen.decotv.service/segmentProbe.js
 service/com.cheerchen.decotv.service/service.js
 service/com.cheerchen.decotv.service/services.json
 service/com.cheerchen.decotv.service/sessionStore.js
+service/com.cheerchen.decotv.service/tmdb.key
+service/com.cheerchen.decotv.service/tmdbUpstream.js
 service/com.cheerchen.decotv.service/tsResolution.js
 webOSTVjs-1.2.12/LICENSE-2.0.txt
 webOSTVjs-1.2.12/webOSTV-dev.js

@@ -303,10 +303,39 @@ describe("service image pipeline", () => {
     assert.equal(pipeline.diagnostics().cacheError, 2);
   });
 
+  test("fetches TMDB posters directly, without the DecoTV proxy or a Douban Referer", async () => {
+    const transport = fakeClient([
+      response(200, "image/jpeg", JPEG)
+    ]);
+    const pipeline = new ImagePipeline({
+      sessions: sessions(),
+      cache: new MemoryCache(),
+      http: transport,
+      https: transport
+    });
+
+    const result = await fetchImage(
+      pipeline,
+      "https://deco.test",
+      "https://image.tmdb.org/t/p/w500/a.jpg"
+    );
+
+    assert.equal(result.error, null);
+    assert.equal(result.result.source, "direct");
+    assert.equal(transport.requests.length, 1);
+    assert.equal(transport.requests[0].hostname, "image.tmdb.org");
+    assert.equal(transport.requests[0].headers.Referer, undefined);
+    assert.equal(transport.requests[0].headers.Cookie, undefined);
+    assert.equal(pipeline.diagnostics().proxyHit, 0);
+  });
+
   test("enforces exact trusted-domain and HTTPS boundaries", () => {
     assert.equal(hostnameAllowed("img9.doubanio.com"), true);
     assert.equal(hostnameAllowed("DOUBAN.COM."), true);
     assert.equal(hostnameAllowed("doubanio.com.evil.test"), false);
+    assert.equal(hostnameAllowed("image.tmdb.org"), true);
+    assert.equal(hostnameAllowed("image.tmdb.org.evil.test"), false);
+    assert.equal(hostnameAllowed("evil.tmdb.org"), false);
     assert.throws(
       () => directTarget("http://img9.doubanio.com/a.jpg"),
       /not trusted/

@@ -1,7 +1,8 @@
 // catalogProvider.js — global catalog provider switch.
 // The browse tabs stay the same regardless of provider; this stores which
-// backend ("douban" | "tmdb") feeds them. Douban is the default and needs
-// no sidecar; TMDB requires a sidecar URL (see tmdbClient.js).
+// backend ("douban" | "tmdb") feeds them. Douban is the default; both are
+// fetched directly by the on-device service (see doubanDirect.js /
+// tmdbClient.js).
 
 import { LocalStore } from "./localStore.js";
 

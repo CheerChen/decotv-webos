@@ -5,7 +5,7 @@ import {
   LunaResponse,
   hasLunaTransport,
   lunaFetchImage,
-  lunaSidecarFetchImage
+  lunaTmdbFetch
 } from "../js/core/network/lunaTransport.js";
 
 describe("Luna transport response", () => {
@@ -26,20 +26,19 @@ describe("Luna transport response", () => {
     assert.equal(hasLunaTransport(), false);
   });
 
-  test("lunaSidecarFetchImage routes via fetchSidecar with base64 encoding", async () => {
+  test("lunaTmdbFetch sends only the relative /3/ path to fetchTmdb", async () => {
     const previous = globalThis.window;
     let call;
     globalThis.window = {
       webOS: {
         service: {
           request(uri, options) {
-            call = { uri, method: options.method, parameters: options.parameters };
+            call = { method: options.method, parameters: options.parameters };
             options.onSuccess({
               returnValue: true,
               status: 200,
-              contentType: "image/jpeg",
-              encoding: "base64",
-              body: Buffer.from("poster-bytes").toString("base64")
+              contentType: "application/json",
+              body: "{\"results\":[]}"
             });
             return { cancel() {} };
           }
@@ -47,49 +46,30 @@ describe("Luna transport response", () => {
       }
     };
     try {
-      const result = await lunaSidecarFetchImage(
-        "http://192.168.0.110:4001",
-        "http://192.168.0.110:4001/api/image?url=https%3A%2F%2Fimage.tmdb.org%2Ft%2Fp%2Fw500%2Fa.jpg"
-      );
-      assert.equal(call.method, "fetchSidecar");
-      // Full sidecar URL is reduced to the relative path the service expects.
-      assert.equal(
-        call.parameters.path,
-        "/api/image?url=https%3A%2F%2Fimage.tmdb.org%2Ft%2Fp%2Fw500%2Fa.jpg"
-      );
-      assert.equal(call.parameters.responseEncoding, "base64");
-      assert.equal(result.contentType, "image/jpeg");
-      assert.equal(result.source, "sidecar");
-      // The Luna body is base64; the caller decodes it later via atob.
-      assert.equal(result.base64, Buffer.from("poster-bytes").toString("base64"));
+      const response = await lunaTmdbFetch("/3/trending/movie/week?language=zh-CN&page=1");
+      assert.equal(call.method, "fetchTmdb");
+      assert.equal(call.parameters.path, "/3/trending/movie/week?language=zh-CN&page=1");
+      assert.equal(call.parameters.method, "GET");
+      assert.deepEqual(await response.json(), { results: [] });
     } finally {
       globalThis.window = previous;
     }
   });
 
-  test("lunaSidecarFetchImage parses bare paths through URL", async () => {
+  test("lunaTmdbFetch surfaces a service-side failure", async () => {
     const previous = globalThis.window;
-    let call;
     globalThis.window = {
       webOS: {
         service: {
           request(uri, options) {
-            call = { parameters: options.parameters };
-            options.onSuccess({ returnValue: true, status: 200, body: "" });
+            options.onSuccess({ returnValue: false, error: "TMDB key is not bundled" });
             return { cancel() {} };
           }
         }
       }
     };
     try {
-      await lunaSidecarFetchImage(
-        "http://192.168.0.110:4001",
-        "/api/image?url=https%3A%2F%2Fimage.tmdb.org%2Ft%2Fp%2Fw500%2Fb.jpg"
-      );
-      assert.equal(
-        call.parameters.path,
-        "/api/image?url=https%3A%2F%2Fimage.tmdb.org%2Ft%2Fp%2Fw500%2Fb.jpg"
-      );
+      await assert.rejects(lunaTmdbFetch("/3/x"), /TMDB key is not bundled/);
     } finally {
       globalThis.window = previous;
     }

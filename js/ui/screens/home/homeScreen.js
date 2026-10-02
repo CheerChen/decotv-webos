@@ -174,13 +174,7 @@ export const HomeScreen = {
     } else {
       data = await tmdb.getChart("movie", "hot", 1);
     }
-    const list = Array.isArray(data?.list) ? data.list : [];
-    // Poster comes back as a raw image.tmdb.org URL; wrap it through the
-    // sidecar image proxy so posterImage.js routes it via the sidecar.
-    return list.map((item) => ({
-      ...item,
-      poster: tmdb.getImageUrl(item.poster) || item.poster,
-    }));
+    return Array.isArray(data?.list) ? data.list : [];
   },
 
   // Called by librarySync once a pull has changed the local store. Re-running

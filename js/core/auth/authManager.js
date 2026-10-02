@@ -147,12 +147,7 @@ export const AuthManager = {
       return;
     }
     api.setBaseUrl(stored);
-    // Sidecar URL is derived from the DecoTV server (same host, port 4001);
-    // keep the reference so poster/search can resolve it without typing.
-    tmdb.setServerBaseUrl(stored);
-    // Restore TMDB sidecar URL from storage so TMDB tabs work on launch.
-    const sidecarUrl = tmdb.getStoredSidecarUrl();
-    if (sidecarUrl) tmdb.setSidecarUrl(sidecarUrl);
+    tmdb.clearLegacyStorage();
 
     // Fast path: use cached server config to skip a network round-trip.
     const cachedCfg = api.getStoredServerConfig();

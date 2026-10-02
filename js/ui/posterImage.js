@@ -8,14 +8,14 @@
 // sends. Roughly nine in ten posters on the home screen come from Douban.
 //
 // So the bytes are fetched by the JS service through DecoTV's authenticated
-// proxy, a persistent disk cache, and a tightly scoped Douban fallback. They
+// proxy, a persistent disk cache, and a tightly scoped Douban fallback (TMDB
+// posters skip the proxy and go straight to image.tmdb.org). They
 // arrive here as base64 and are turned into a blob URL. Screens render a
 // placeholder plus the remote address and this module swaps in the real image.
 
 import { escapeAttr } from "./utils.js";
 import { api } from "../core/network/decotvClient.js";
-import { tmdb } from "../core/network/tmdbClient.js";
-import { hasLunaTransport, lunaFetchImage, lunaSidecarFetchImage } from "../core/network/lunaTransport.js";
+import { hasLunaTransport, lunaFetchImage } from "../core/network/lunaTransport.js";
 
 // 1x1 transparent GIF: keeps layout stable and, unlike an empty src, does not
 // make the webview issue a request for the document itself.
@@ -60,18 +60,11 @@ function pump() {
 
 function resolve(url) {
   const baseUrl = api.baseURL || api.getStoredBaseUrl() || "";
-  const sidecarUrl = tmdb.resolveSidecarUrl(baseUrl);
-  // Sidecar URLs (TMDB images) go through a separate fetch path that
-  // does not need the DecoTV auth cookie and is not restricted to
-  // Douban image hosts.
-  const isSidecar = sidecarUrl && url.startsWith(sidecarUrl);
-  const fetchBaseUrl = isSidecar ? sidecarUrl : baseUrl;
-  const key = `${fetchBaseUrl}\0${url}`;
+  const key = `${baseUrl}\0${url}`;
   if (cache.has(key)) return Promise.resolve(cache.get(key));
   if (pending.has(key)) return pending.get(key);
-  const fetcher = isSidecar ? lunaSidecarFetchImage : lunaFetchImage;
   const task = new Promise((done, fail) => {
-    queue.push(() => fetcher(fetchBaseUrl, url).then((result) => {
+    queue.push(() => lunaFetchImage(baseUrl, url).then((result) => {
       try {
         const objectUrl = toBlobUrl(result.base64, result.contentType);
         remember(key, objectUrl);

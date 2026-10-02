@@ -87,8 +87,8 @@ export async function bootToHome(page) {
             ok({ returnValue: true, ready: false, port: 0 });
             return CANCEL;
           }
-          if (options.method === "fetchSidecar") {
-            fail("no sidecar in e2e");
+          if (options.method === "fetchTmdb") {
+            fail("no TMDB in e2e");
             return CANCEL;
           }
           fail(`unhandled luna method: ${options.method}`);

@@ -18,3 +18,6 @@ decotv-tmdb-sidecar/.env
 
 # Test fixtures — real CDN captures, not for repo
 decotv-tmdb-sidecar/test/fixtures/
+
+# TMDB API key: bundled into the IPK at package time, never committed
+service/com.cheerchen.decotv.service/tmdb.key

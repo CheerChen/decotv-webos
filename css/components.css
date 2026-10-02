@@ -732,6 +732,13 @@
   word-break: break-all;
 }
 
+/* Data-source attribution under the device info list (TMDB terms). */
+.settings-note {
+  margin-top: 12px;
+  font-size: 16px;
+  color: var(--text-dim);
+}
+
 /* Detail section heads: title + inline control + hint on one baseline. */
 
 .detail-section-head {

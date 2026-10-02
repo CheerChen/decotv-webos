@@ -305,9 +305,9 @@ export const SearchScreen = {
         this.autoLoadTotal = Number.isFinite(this._tmdbTotal) ? this._tmdbTotal : null;
         return list;
       } catch (e) {
-        // TMDB sidecar unreachable (not deployed / bad URL / key error).
-        // Auto-fallback to Douban so an upgraded client without the sidecar
-        // still browses instead of showing a dead error. One-shot: provider
+        // TMDB unreachable (network block / key revoked / no service in
+        // browser preview). Auto-fallback to Douban so browsing keeps
+        // working instead of showing a dead error. One-shot: provider
         // is now douban, so this branch won't fire again this session.
         if (e?.name === "AbortError") throw e;
         setProvider("douban");
@@ -386,13 +386,13 @@ export const SearchScreen = {
     return [];
   },
 
-  // TMDB provider: route to sidecar chart or discover endpoint.
+  // TMDB provider: route to the chart or discover endpoint.
   // `tcfg` is the cfg.tmdb block (endpoint, mediaType, genrePreset, ...).
   async _fetchTmdb(tcfg, fv, page) {
     const mediaType = tcfg.mediaType || "movie";
     if (tcfg.endpoint === "chart") {
       const chart = fv.chart || "hot";
-      const data = await tmdb.getChart(mediaType, chart, page);
+      const data = await tmdb.getChart(mediaType, chart, page, { region: fv.region || "" });
       return this._normalizeTmdbList(data);
     }
     if (tcfg.endpoint === "discover") {
@@ -423,17 +423,12 @@ export const SearchScreen = {
     return [];
   },
 
-  // TMDB sidecar returns {list:[{id,title,poster,rate,year}]} where poster
-  // is a full image.tmdb.org URL. Wrap it through the sidecar image proxy
-  // so posterImage.js routes it via lunaSidecarFetchImage. Also captures
-  // `total` for the auto-load eligibility check.
+  // TMDB returns {list:[{id,title,poster,rate,year}]} where poster is a
+  // full image.tmdb.org URL. Captures `total` for the auto-load eligibility
+  // check.
   _normalizeTmdbList(data) {
-    const list = Array.isArray(data?.list) ? data.list : [];
     this._tmdbTotal = Number.isFinite(data?.total) ? data.total : null;
-    return list.map((item) => ({
-      ...item,
-      poster: tmdb.getImageUrl(item.poster) || item.poster,
-    }));
+    return Array.isArray(data?.list) ? data.list : [];
   },
 
   _cardHtml(r, i) {

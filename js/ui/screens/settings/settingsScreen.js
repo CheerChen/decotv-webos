@@ -4,7 +4,6 @@ import { ScreenUtils } from "../../navigation/screen.js";
 import { Router } from "../../navigation/router.js";
 import { AuthManager } from "../../../core/auth/authManager.js";
 import { api } from "../../../core/network/decotvClient.js";
-import { tmdb } from "../../../core/network/tmdbClient.js";
 import { getProvider, setProvider } from "../../../core/storage/catalogProvider.js";
 import { LocalLibrary } from "../../../core/storage/localLibrary.js";
 import { LibrarySync } from "../../../core/storage/librarySync.js";
@@ -31,9 +30,9 @@ function readClientVersion() {
   });
 }
 
-function infoRow(label, value, rowKey = "") {
+function infoRow(label, value) {
   return `
-    <div class="settings-item settings-item-readonly"${rowKey ? ` data-row="${rowKey}"` : ""}>
+    <div class="settings-item settings-item-readonly">
       <div class="settings-label">${escapeHtml(label)}</div>
       <div class="settings-value">${escapeHtml(value)}</div>
     </div>
@@ -56,11 +55,6 @@ export const SettingsScreen = {
     const clientVersion = await readClientVersion();
     const provider = getProvider();
     const providerLabel = provider === "tmdb" ? t("settings.providerTmdb") : t("settings.providerDouban");
-    // Sidecar address is derived (same host, port 4001), never typed. The
-    // value shows the derived address only while the sidecar is reachable;
-    // otherwise "—" (not deployed / not running).
-    const derivedSidecar = tmdb.deriveSidecarUrl(baseUrl);
-    const tmdbSidecarValue = "—"; // replaced by probeSidecar below
 
     // Left: focusable actions. Right: read-only client + server facts.
     this.container.innerHTML = `
@@ -99,11 +93,11 @@ export const SettingsScreen = {
               ${infoRow(t("settings.appVersion"), clientVersion)}
               ${infoRow(t("settings.appId"), "com.cheerchen.decotv")}
             </div>
+            ${provider === "tmdb" ? `<div class="settings-note">${escapeHtml(t("settings.tmdbAttribution"))}</div>` : ""}
             <div class="section-title">${t("settings.serverInfo")}</div>
             <div class="settings-list">
               ${infoRow(t("settings.siteName"), siteName)}
               ${infoRow(t("settings.serverUrl"), baseUrl)}
-              ${infoRow(t("settings.tmdbSidecar"), tmdbSidecarValue, "tmdb-sidecar")}
               ${infoRow(t("settings.serverVersion"), serverVersion)}
               ${infoRow(t("settings.storageType"), storageType)}
               ${infoRow(t("settings.authMode"), authMode)}
@@ -119,27 +113,6 @@ export const SettingsScreen = {
       this.container.querySelector(`.settings-item[data-action="${focusAction}"]`)
       || this.container.querySelector('.settings-item[data-action="change-server"]')
     );
-
-    // Probe the derived sidecar address: show it only while reachable.
-    // The row is rendered as "—" initially and upgraded in place when the
-    // sidecar answers /healthz. This keeps the server info honest without
-    // asking the user to type anything.
-    this._probeSidecarRow(derivedSidecar);
-  },
-
-  // GET /healthz on the derived sidecar URL with a short timeout. On success
-  // the row value becomes the address; otherwise it stays "—".
-  _probeSidecarRow(derivedSidecar) {
-    const row = this.container?.querySelector('[data-row="tmdb-sidecar"] .settings-value');
-    if (!row || !derivedSidecar) return;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2500);
-    fetch(`${derivedSidecar}/healthz`, { signal: controller.signal })
-      .then((res) => {
-        if (res.ok) row.textContent = derivedSidecar;
-      })
-      .catch(() => { /* not reachable → keep "—" */ })
-      .finally(() => clearTimeout(timer));
   },
 
   async onKeyDown(event) {
@@ -168,7 +141,7 @@ export const SettingsScreen = {
       if (action === "toggle-provider") {
         const next = getProvider() === "tmdb" ? "douban" : "tmdb";
         setProvider(next);
-        // Re-mount so the sidecar URL row appears/disappears and the
+        // Re-mount so the TMDB attribution appears/disappears and the
         // label updates.
         Router.navigate("settings", { focusAction: "toggle-provider" });
         return;

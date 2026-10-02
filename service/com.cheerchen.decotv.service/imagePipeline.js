@@ -25,10 +25,24 @@ function imageError(message, code, properties) {
   return error;
 }
 
-function hostnameAllowed(hostname) {
-  var host = String(hostname || "").toLowerCase().replace(/\.$/, "");
+function normalizedHost(hostname) {
+  return String(hostname || "").toLowerCase().replace(/\.$/, "");
+}
+
+function doubanHost(hostname) {
+  var host = normalizedHost(hostname);
   return /(^|\.)doubanio\.com$/.test(host) ||
     /(^|\.)douban\.com$/.test(host);
+}
+
+// TMDB posters are public and unrelated to the DecoTV server, so they skip
+// the authenticated proxy and always go direct.
+function directOnlyHost(hostname) {
+  return normalizedHost(hostname) === "image.tmdb.org";
+}
+
+function hostnameAllowed(hostname) {
+  return doubanHost(hostname) || directOnlyHost(hostname);
 }
 
 function parseImageUrl(rawUrl) {
@@ -279,9 +293,10 @@ ImagePipeline.prototype.fetchDirect = function (rawUrl, redirectsLeft, callback,
   var headers = {
     "User-Agent": IMAGE_USER_AGENT,
     "Accept": IMAGE_ACCEPT,
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "Referer": "https://movie.douban.com/"
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"
   };
+  // Douban answers 418 without its own Referer; other hosts get none.
+  if (doubanHost(target.hostname)) headers.Referer = "https://movie.douban.com/";
   this.requestBytes(target, headers, function (error, response) {
     if (error) {
       self.stats.timeMs.direct += Math.max(0, self.now() - startedAt);
@@ -353,6 +368,11 @@ ImagePipeline.prototype.fetchNetwork = function (origin, logicalUrl, target, cal
       }
       callback(null, result);
     });
+  }
+
+  if (directOnlyHost(target.hostname)) {
+    direct(false);
+    return;
   }
 
   if (hostnameAllowed(target.hostname) && this.breakerOpen(breakerKey)) {
@@ -467,6 +487,7 @@ ImagePipeline.prototype.diagnostics = function () {
 module.exports = {
   ImagePipeline: ImagePipeline,
   hostnameAllowed: hostnameAllowed,
+  directOnlyHost: directOnlyHost,
   parseImageUrl: parseImageUrl,
   directTarget: directTarget,
   validImage: validImage,

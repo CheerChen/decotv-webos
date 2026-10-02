@@ -15,6 +15,7 @@ var originOf = require("./sessionStore").originOf;
 var ImageCache = require("./imageCache").ImageCache;
 var ImagePipeline = require("./imagePipeline").ImagePipeline;
 var DoubanCache = require("./doubanCache").DoubanCache;
+var tmdbUpstream = require("./tmdbUpstream.js");
 var m3u8Filter = require("./m3u8AdFilter.js");
 var segmentProbe = require("./segmentProbe.js");
 
@@ -297,27 +298,20 @@ function fetchDouban(message) {
 
 service.register("fetchDouban", fetchDouban);
 
-// Sidecar fetch: TMDB catalog sidecar runs on a separate origin (e.g.
-// http://pi:4001) with no auth cookie. Unlike `request`, this does not
-// require an /api/ path prefix or a session — the sidecar is LAN-only
-// and open. Used for both catalog JSON and image bytes.
-function sidecarTargetFor(baseUrl, relativePath) {
-  var origin = originOf(baseUrl);
-  if (typeof relativePath !== "string" ||
-      relativePath.charAt(0) !== "/" ||
-      relativePath.slice(0, 2) === "//") {
-    throw new Error("A relative path is required");
-  }
-  var target = new URLCtor(relativePath, origin);
-  if (originOf(target.href) !== origin) {
-    throw new Error("Sidecar request must stay on the sidecar origin");
-  }
-  return target;
-}
+// TMDB fetch: catalog JSON from api.themoviedb.org. The page builds the
+// /3/ path (chart / discover / images); the service locks the origin, adds
+// the bundled API key (tmdb.key, see tmdbUpstream.js) and caches list
+// responses. GET only. A missing key fails every call, which the page turns
+// into its Douban fallback.
+var TMDB_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+var tmdbCredential = tmdbUpstream.loadCredential(path.join(__dirname, "tmdb.key"));
+// Lists change slowly (trending is weekly); six hours keeps a browsing
+// session warm without serving yesterday's "now playing" all day.
+var tmdbCache = new DoubanCache(6 * 60 * 60 * 1000, 300);
+var tmdbAgent = new https.Agent({ keepAlive: true, maxSockets: 8 });
 
-function fetchSidecar(message) {
+function fetchTmdb(message) {
   var payload = message.payload || {};
-  var target;
   var responded = false;
 
   function respond(response) {
@@ -326,40 +320,51 @@ function fetchSidecar(message) {
     message.respond(response);
   }
 
-  function failSidecar(error) {
+  function failTmdb(error) {
     respond({ returnValue: false, error: String(error.message || error) });
   }
 
+  if (!tmdbCredential) {
+    failTmdb(new Error("TMDB key is not bundled"));
+    return;
+  }
+
+  var target;
   try {
-    target = sidecarTargetFor(payload.baseUrl, payload.path);
+    target = tmdbUpstream.tmdbTargetFor(payload.path);
   } catch (error) {
-    failSidecar(error);
+    failTmdb(error);
     return;
   }
 
   var method = String(payload.method || "GET").toUpperCase();
-  if (["GET", "POST", "PUT", "PATCH", "DELETE"].indexOf(method) < 0) {
-    failSidecar(new Error("HTTP method not allowed"));
+  if (method !== "GET") {
+    failTmdb(new Error("HTTP method not allowed"));
     return;
   }
 
-  var body = typeof payload.body === "string" ? payload.body : "";
-  var headers = {
-    "Accept": "application/json, text/plain, */*",
-    "User-Agent": "DecoTV-webOS-Service/0.1"
-  };
-  if (payload.contentType) headers["Content-Type"] = String(payload.contentType);
-  if (body) headers["Content-Length"] = Buffer.byteLength(body);
+  var upstream = tmdbUpstream.upstreamRequest(target, tmdbCredential);
+  var useCache = tmdbUpstream.cacheable(target);
+  var cached = useCache ? tmdbCache.get(upstream.cacheKey) : null;
+  if (cached) {
+    respond({
+      returnValue: true,
+      status: 200,
+      contentType: "application/json",
+      body: cached,
+      cached: true
+    });
+    return;
+  }
 
-  var client = target.protocol === "https:" ? https : http;
-  var req = client.request({
-    protocol: target.protocol,
+  var req = https.request({
+    protocol: "https:",
     hostname: target.hostname,
-    port: target.port || (target.protocol === "https:" ? 443 : 80),
-    method: method,
-    path: target.pathname + target.search,
-    headers: headers,
-    agent: target.protocol === "https:" ? httpsAgent : httpAgent
+    port: 443,
+    method: "GET",
+    path: upstream.path,
+    headers: upstream.headers,
+    agent: tmdbAgent
   }, function (res) {
     var chunks = [];
     var size = 0;
@@ -368,10 +373,10 @@ function fetchSidecar(message) {
     res.on("data", function (chunk) {
       if (finished) return;
       size += chunk.length;
-      if (size > MAX_RESPONSE_BYTES) {
+      if (size > TMDB_MAX_RESPONSE_BYTES) {
         finished = true;
         req.destroy();
-        failSidecar(new Error("Sidecar response exceeds 8 MiB"));
+        failTmdb(new Error("TMDB response exceeds 2 MiB"));
         return;
       }
       chunks.push(chunk);
@@ -379,19 +384,16 @@ function fetchSidecar(message) {
     res.on("end", function () {
       if (finished) return;
       finished = true;
-      var contentType = res.headers["content-type"] || "";
-      // Auto-detect image responses: binary data must be base64-encoded
-      // or the Luna bus will UTF-8-mangle non-ASCII bytes into replacement
-      // characters. This also covers the case where the client's
-      // responseEncoding parameter doesn't reach the service.
-      var isImage = String(contentType).indexOf("image/") === 0;
-      var encoding = (isImage || payload.responseEncoding === "base64") ? "base64" : "utf8";
+      var body = Buffer.concat(chunks).toString("utf8");
+      var status = res.statusCode;
+      if (status === 200 && useCache) {
+        tmdbCache.set(upstream.cacheKey, body);
+      }
       respond({
         returnValue: true,
-        status: res.statusCode,
-        contentType: contentType,
-        encoding: encoding,
-        body: Buffer.concat(chunks).toString(encoding)
+        status: status,
+        contentType: res.headers["content-type"] || "",
+        body: body
       });
     });
   });
@@ -399,162 +401,17 @@ function fetchSidecar(message) {
   var requestedTimeout = Number(payload.timeoutMs);
   var timeoutMs = requestedTimeout > 0
     ? Math.min(Math.max(requestedTimeout, 1000), 60000)
-    : 60000;
+    : 15000;
   req.setTimeout(timeoutMs, function () {
-    req.destroy(new Error("Sidecar upstream timeout"));
+    req.destroy(new Error("TMDB upstream timeout"));
   });
   req.on("error", function (error) {
-    failSidecar(error);
-  });
-  if (body) req.write(body);
-  req.end();
-}
-
-service.register("fetchSidecar", fetchSidecar);
-
-// Sidecar image fetch: TMDB images served by the sidecar's /api/image
-// endpoint. No cookie, no Douban host allowlist — the sidecar is the
-// only network hop. Reuses the persistent image cache so repeated
-// posters do not re-fetch.
-function fetchSidecarImage(message) {
-  var payload = message.payload || {};
-  var baseUrl = String(payload.baseUrl || "");
-  var url = String(payload.url || "");
-  if (!baseUrl || !url) {
-    message.respond({
-      returnValue: false,
-      error: !baseUrl ? "Missing sidecar URL" : "Missing image URL"
-    });
-    return;
-  }
-
-  var origin;
-  var target;
-  try {
-    origin = originOf(baseUrl);
-    target = new URLCtor(url, origin);
-    if (originOf(target.href) !== origin) {
-      throw new Error("Sidecar image must stay on the sidecar origin");
-    }
-  } catch (error) {
-    message.respond({
-      returnValue: false,
-      error: String(error.message || error)
-    });
-    return;
-  }
-
-  var requestKey = "sidecar\0" + target.href;
-  if (images.inFlight[requestKey]) {
-    images.inFlight[requestKey].push(function (error, result) {
-      if (error) {
-        message.respond({
-          returnValue: false,
-          error: String(error.message || error),
-          errorCode: error.code || "SIDECAR_IMAGE_FAILED"
-        });
-        return;
-      }
-      message.respond({
-        returnValue: true,
-        contentType: result.contentType || "image/jpeg",
-        base64: result.body.toString("base64"),
-        source: "sidecar"
-      });
-    });
-    return;
-  }
-
-  var headers = {
-    "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-    "User-Agent": "DecoTV-webOS-Service/0.1"
-  };
-
-  var client = target.protocol === "https:" ? https : http;
-  var req = client.request({
-    protocol: target.protocol,
-    hostname: target.hostname,
-    port: target.port || (target.protocol === "https:" ? 443 : 80),
-    method: "GET",
-    path: target.pathname + target.search,
-    headers: headers,
-    agent: target.protocol === "https:" ? httpsAgent : httpAgent
-  }, function (res) {
-    var chunks = [];
-    var size = 0;
-    var finished = false;
-
-    if (Number(res.headers["content-length"]) > 4 * 1024 * 1024) {
-      req.destroy();
-      message.respond({
-        returnValue: false,
-        error: "Sidecar image exceeds 4 MiB",
-        errorCode: "SIDECAR_IMAGE_TOO_LARGE"
-      });
-      return;
-    }
-
-    res.on("data", function (chunk) {
-      if (finished) return;
-      size += chunk.length;
-      if (size > 4 * 1024 * 1024) {
-        finished = true;
-        req.destroy();
-        message.respond({
-          returnValue: false,
-          error: "Sidecar image exceeds 4 MiB",
-          errorCode: "SIDECAR_IMAGE_TOO_LARGE"
-        });
-        return;
-      }
-      chunks.push(chunk);
-    });
-    res.on("end", function () {
-      if (finished) return;
-      finished = true;
-      if (res.statusCode !== 200) {
-        message.respond({
-          returnValue: false,
-          error: "Sidecar image answered " + res.statusCode,
-          errorCode: "SIDECAR_IMAGE_HTTP_ERROR",
-          status: res.statusCode
-        });
-        return;
-      }
-      var contentType = res.headers["content-type"] || "image/jpeg";
-      var body = Buffer.concat(chunks);
-      message.respond({
-        returnValue: true,
-        contentType: contentType,
-        base64: body.toString("base64"),
-        source: "sidecar"
-      });
-    });
-    res.on("error", function (error) {
-      if (finished) return;
-      finished = true;
-      message.respond({
-        returnValue: false,
-        error: String(error.message || error),
-        errorCode: "SIDECAR_IMAGE_NETWORK_ERROR"
-      });
-    });
-  });
-
-  req.setTimeout(15000, function () {
-    req.destroy(new Error("Sidecar image timeout"));
-  });
-  req.on("error", function (error) {
-    message.respond({
-      returnValue: false,
-      error: String(error.message || error),
-      errorCode: "SIDECAR_IMAGE_NETWORK_ERROR"
-    });
+    failTmdb(error);
   });
   req.end();
 }
 
-service.register("fetchSidecarImage", fetchSidecarImage);
+service.register("fetchTmdb", fetchTmdb);
 
 // Posters use one stable Luna API. The service first asks the selected DecoTV
 // server's authenticated image proxy, then (only for a confirmed upstream
@@ -626,8 +483,7 @@ service.register("diagnostics", function (message) {
 // so ad positions that drift between requests can no longer sneak in.
 //
 // Segments are left as direct CDN URLs (bandwidth); only playlists are
-// proxied. The filter core is in m3u8AdFilter.js (pure functions, shared
-// with the sidecar control group).
+// proxied. The filter core is in m3u8AdFilter.js (pure functions).
 //
 // The server starts when the service is first launched (any Luna call wakes
 // it) and lives as long as the service process. webOS dynamic services are

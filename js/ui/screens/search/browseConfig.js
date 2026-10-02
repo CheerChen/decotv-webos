@@ -1,6 +1,6 @@
 // browseConfig.js — static browse filters and tab definitions.
 // Each tab carries a Douban config (the default) plus a `tmdb` block that
-// describes how the same tab maps to the TMDB sidecar when the user
+// describes how the same tab maps to TMDB (tmdbClient.js) when the user
 // switches provider in settings. The search screen reads the active
 // provider from a shared store and picks the right branch.
 
@@ -142,8 +142,8 @@ export const TYPE_CONFIGS = {
         {
           id: "chart", label: "榜单",
           options: [
-            { label: "周趋势", value: "hot" },
-            { label: "正在上映", value: "latest" },
+            { label: "热门电影", value: "hot" },
+            { label: "最新电影", value: "latest" },
             { label: "高分榜", value: "top_rated" },
             { label: "冷门佳片", value: "hidden_gems" },
           ],
@@ -173,16 +173,16 @@ export const TYPE_CONFIGS = {
     tmdb: {
       endpoint: "chart",
       mediaType: "tv",
+      // Douban's region row minus 国产/日本/韩国: TMDB has too few votes on
+      // those series for the 100-vote floor to leave anything current.
       filters: [
         {
-          id: "chart", label: "榜单",
+          id: "region", label: "类型",
           options: [
-            { label: "周趋势", value: "hot" },
-            { label: "今日播出", value: "latest" },
-            { label: "高分榜", value: "top_rated" },
-            { label: "冷门佳片", value: "hidden_gems" },
+            { label: "全部", value: "" },
+            { label: "欧美", value: "欧美" },
           ],
-          default: "hot",
+          default: "",
         },
       ],
     },
