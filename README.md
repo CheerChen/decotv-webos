@@ -45,7 +45,7 @@
 
 本仓库是 **[DecoTV](https://github.com/Decohererk/DecoTV)** 在 **LG webOS 电视**上的专用客户端（非浏览器套壳）。
 
-- 对接已部署的 DecoTV 服务端：聚合搜索、多源测速与播放（豆瓣目录由客户端直连 m.douban.com，不经过服务端）；可选部署 TMDB sidecar 后切换 TMDB 目录
+- 对接已部署的 DecoTV 服务端：聚合搜索、多源测速与播放（豆瓣目录由客户端直连 m.douban.com，不经过服务端）；可在设置中切换为 TMDB 目录（同样由客户端直连）
 - 为 TV UI 与遥控器 D-pad 设计焦点导航
 - 使用 webOS 原生 `<video>` **硬件解码 HLS**，不依赖 HLS.js
 - **不需要 root**；开发者模式或 [Homebrew Channel](https://github.com/webosbrew/webos-homebrew-channel) 即可安装
@@ -61,7 +61,7 @@
 | 能力 | 说明 |
 | --- | --- |
 | 首页海报墙 | 继续观看置顶；热门电影、剧集、动漫、综艺分行展示 |
-| 目录浏览 | 豆瓣热门与精选（电影、剧集、动漫、综艺、纪录片），可按地区 / 类型 / 年份筛选 |
+| 目录浏览 | 豆瓣热门与精选（电影、剧集、动漫、综艺、纪录片），可按地区 / 类型 / 年份筛选；设置中可切换为 TMDB 目录，TMDB 不可用时自动回退豆瓣 |
 | 分类自动下加载 | 大结果集浏览到列表末尾时自动追加下一页，单分类最多 100 个条目，无需手动翻页 |
 | 多源测速优选 | 并发检测全部播放源，按画质、吞吐与启动时延排序；测速在后台继续，期间可随时开始播放 |
 | 详情页直达播放 | 点击剧集或播放源即开始播放；剧集列表在播放源上方，上次观看的剧集高亮标记 |
@@ -79,7 +79,6 @@
 1. **LG webOS 电视**（开发者模式或已装 Homebrew Channel；root 非必须）
 2. **已部署的 DecoTV 服务**（`public` 模式可匿名使用；收藏与播放记录同步需账号模式）
 3. 电视与服务端网络可达（同局域网或可访问的域名 / IP）
-4. （可选）**TMDB 目录源**：部署仓库内 [decotv-tmdb-sidecar](decotv-tmdb-sidecar/)（默认与 DecoTV 服务端同机、端口 4001，需自备 TMDB API Key）；不部署时使用豆瓣目录
 
 服务端部署参见：[DecoTV](https://github.com/Decohererk/DecoTV)
 
@@ -113,6 +112,8 @@ ssh root@TV 'sync; reboot'   # 首次安装需重启，sam 才会注册应用
 也可本地打包：
 
 ```bash
+# TMDB 目录需要 API Key（v3 key 或 v4 Read Access Token），打包进 IPK、不进 git：
+echo '<your-tmdb-key>' > service/com.cheerchen.decotv.service/tmdb.key
 ./scripts/package.sh
 # → com.cheerchen.decotv_<version>_all.ipk
 ```
@@ -172,7 +173,6 @@ uv run tvkit/scripts/cdp_reload.py --target decotv
 ## 相关项目
 
 - [DecoTV](https://github.com/Decohererk/DecoTV) — 服务端 / Web 端
-- [decotv-tmdb-sidecar](decotv-tmdb-sidecar/) — 本仓库内置的 TMDB 目录代理服务
 - [webosbrew](https://github.com/webosbrew) — webOS 社区工具与应用仓库
 
 ---

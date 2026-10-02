@@ -45,7 +45,7 @@
 
 A **purpose-built webOS TV client** for [DecoTV](https://github.com/Decohererk/DecoTV) — not a browser wrapper.
 
-- Talks to a self-hosted DecoTV server: multi-source search, probe ranking, playback (the Douban catalog is fetched directly from m.douban.com, not through the server); an optional TMDB sidecar switches the catalog to TMDB
+- Talks to a self-hosted DecoTV server: multi-source search, probe ranking, playback (the Douban catalog is fetched directly from m.douban.com, not through the server); the catalog can be switched to TMDB in settings (also fetched directly)
 - TV UI with remote D-pad focus navigation
 - Native `<video>` **hardware HLS decode** on webOS (no HLS.js)
 - **No root required** — Developer Mode or [Homebrew Channel](https://github.com/webosbrew/webos-homebrew-channel)
@@ -61,7 +61,7 @@ See [Releases](https://github.com/CheerChen/decotv-webos/releases) for packages 
 | Feature | Notes |
 | --- | --- |
 | Home wall | Continue-watching on top; hot movie, series, anime and variety rows |
-| Catalog browsing | Douban hot & curated tabs (movies, series, anime, variety, documentary) with region / genre / year filters; deploy the TMDB sidecar to switch to the TMDB catalog, with automatic fallback to Douban |
+| Catalog browsing | Douban hot & curated tabs (movies, series, anime, variety, documentary) with region / genre / year filters; switch to the TMDB catalog in settings, with automatic fallback to Douban |
 | Auto page-load | Large category sets keep loading as focus approaches the end of the grid, up to 100 items per category — no manual paging |
 | Multi-source probe ranking | All sources are measured concurrently, ranked by quality, throughput and startup latency; probing continues in the background and playback can start at any time with the best source so far |
 | Detail page plays directly | Selecting an episode or a source starts playback; the episode grid sits above the (often long) source list, with the last-watched episode highlighted |
@@ -79,7 +79,6 @@ See [Releases](https://github.com/CheerChen/decotv-webos/releases) for packages 
 1. **LG webOS TV** (Developer Mode or Homebrew Channel; root optional)
 2. **DecoTV server** (`public` mode works anonymously; syncing favorites and play history needs an account mode)
 3. Network reachability from the TV to the server
-4. (Optional) **TMDB catalog**: deploy the in-repo [decotv-tmdb-sidecar](decotv-tmdb-sidecar/) (same host as the DecoTV server, port 4001 by default; requires your own TMDB API key); without it the app uses the Douban catalog
 
 Server setup: [DecoTV](https://github.com/Decohererk/DecoTV)
 
@@ -113,6 +112,9 @@ ssh root@TV 'sync; reboot'   # first install needs reboot for sam registration
 Or package locally:
 
 ```bash
+# The TMDB catalog needs an API key (v3 key or v4 Read Access Token); it is
+# bundled into the IPK but kept out of git:
+echo '<your-tmdb-key>' > service/com.cheerchen.decotv.service/tmdb.key
 ./scripts/package.sh
 # → com.cheerchen.decotv_<version>_all.ipk
 ```
@@ -171,7 +173,6 @@ Debug tooling lives in [webos-tv-kit](https://github.com/CheerChen/webos-tv-kit)
 ## Related
 
 - [DecoTV](https://github.com/Decohererk/DecoTV) — server / web UI
-- [decotv-tmdb-sidecar](decotv-tmdb-sidecar/) — in-repo TMDB catalog proxy
 - [webosbrew](https://github.com/webosbrew) — community tools and app catalog
 
 ---
