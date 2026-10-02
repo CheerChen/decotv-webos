@@ -78,6 +78,8 @@ export const DetailScreen = {
     this.probeDone = 0;
     this.probeTotal = 0;
     this.preferCancelled = false;
+    this.searching = false;
+    this.noSources = false;
     this.detail = null;
     this.episodeIndex = 0;
     this._relatedResults = [];
@@ -241,7 +243,7 @@ export const DetailScreen = {
   // silently jumping to episode 3 at 12:34.
   _updatePlayButton() {
     const btn = this.container?.querySelector('.btn[data-action="play"]');
-    if (!btn) return;
+    if (!btn || this.noSources) return;
     const record = this._playRecord();
     let label = "播放";
     if (record && (Number(record.play_time) > 0 || Number(record.index) > 1)) {
@@ -460,10 +462,34 @@ export const DetailScreen = {
 
   async _searchAndPrefer() {
     this._setStatus("🔍 正在搜索播放源…");
+    this.searching = true;
     try {
       await this._runPreferEngine();
     } catch (e) {
       this._setStatus(`搜索失败：${escapeHtml(e?.message || e)}`);
+    } finally {
+      this.searching = false;
+    }
+  },
+
+  // No resource site carries this work. That is a dead end, not a load
+  // failure: say so, take away the actions that cannot do anything (play,
+  // re-measure) and put the way out — back — where focus lands.
+  _showNoSources() {
+    this.noSources = true;
+    this._setStatus("没有找到可播放的资源");
+    const list = this.container.querySelector("#sourceList");
+    if (list) list.innerHTML = `<div class="empty-state">资源站中没有「${escapeHtml(this.title)}」</div>`;
+    const refresh = this.container.querySelector('.btn[data-action="refresh"]');
+    if (refresh) refresh.remove();
+    const play = this.container.querySelector('.btn[data-action="play"]');
+    if (!play) return;
+    const wasFocused = play.classList.contains("focused");
+    play.dataset.action = "back";
+    play.textContent = "返回";
+    const focusedNow = this.container.querySelector(".focused");
+    if (Router.current === "detail" && (wasFocused || !focusedNow)) {
+      ScreenUtils.setFocus(play, this.container);
     }
   },
 
@@ -525,8 +551,7 @@ export const DetailScreen = {
         this.probeTotal = sources.length;
         this.probeDone = Array.from(probeResults.keys()).length;
         if (!sources.length) {
-          this._setStatus("未找到匹配的播放源");
-          this.container.querySelector("#sourceList").innerHTML = `<div class="empty-state">没有「${escapeHtml(this.title)}」的可用源</div>`;
+          this._showNoSources();
           return;
         }
         // Fill missing cover + hero meta from the first search hit that has data.
@@ -748,7 +773,10 @@ export const DetailScreen = {
         const src = this.probeRunning
           ? (bestNow || this.currentSource)
           : (this.currentSource || bestNow);
-        if (!src) { showToast("正在搜索播放源…"); return; }
+        if (!src) {
+          showToast(this.searching ? "正在搜索播放源…" : "没有找到可播放的资源");
+          return;
+        }
         this.currentSource = src;
         await this._startPlayback(src, 0, { preferResume: true });
         return;
@@ -772,6 +800,7 @@ export const DetailScreen = {
         return;
       }
       if (action === "favorite") { await this._toggleFavorite(); return; }
+      if (action === "back") { await Router.back(); return; }
       if (action === "open-related") {
         const idx = Number(focused.dataset.index);
         const r = this._relatedResults[idx];
@@ -789,6 +818,7 @@ export const DetailScreen = {
         return;
       }
       if (action === "refresh") {
+        if (!this.sources.length) { showToast("没有可测速的播放源"); return; }
         if (this.probeRunning) { showToast("测速进行中"); return; }
         this.probeResults = new Map();
         await this._probeAndPick();
