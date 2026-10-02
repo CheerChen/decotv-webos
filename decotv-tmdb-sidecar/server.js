@@ -267,7 +267,8 @@ async function localizedPosterPath(mediaType, id, originalLanguage) {
 
 async function normalizeItem(item, mediaType) {
   const title = item.title || item.name || "";
-  const year = (item.release_date || item.first_air_date || "").slice(0, 4) || "";
+  const date = item.release_date || item.first_air_date || "";
+  const year = date.slice(0, 4) || "";
   const mt = item.media_type || mediaType || (item.first_air_date ? "tv" : "movie");
   let poster = item.poster_path ? `${TMDB_IMAGE_BASE}/w500${item.poster_path}` : "";
   // Prefer the poster in the item's original language when one exists.
@@ -278,9 +279,11 @@ async function normalizeItem(item, mediaType) {
     title,
     poster,
     rate: item.vote_average ? String(Number(item.vote_average).toFixed(1)) : "",
+    votes: item.vote_count || 0,
     year,
     _tmdb_id: item.id,
     _media_type: mt,
+    _date: date,
   };
 }
 
@@ -399,7 +402,18 @@ async function handleChart(params) {
   }
 
   const data = await tmdbFetchWithFallback(endpoint, { page });
-  return normalizeList(data, mediaType);
+  const normalized = await normalizeList(data, mediaType);
+  normalized.list = dropUnreleased(normalized.list);
+  return normalized;
+}
+
+// trending accepts no filters upstream and rides hype waves — unreleased
+// titles (a big sequel years out) surface with few votes and nothing to
+// play. Drop anything whose release date is still in the future; items
+// without a date are kept.
+function dropUnreleased(list) {
+  const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD in TZ
+  return list.filter((it) => !it._date || it._date <= today);
 }
 
 // action=discover
@@ -467,8 +481,9 @@ async function handleDiscover(params) {
   tmdbParams.sort_by = sortBy;
   // Vote-count floor for rating sorts: vote_average.desc ranks 1-2 vote
   // 10.0 obscurities first without it — same defect the chart endpoints
-  // had. Only rating sorts need the floor; popularity/date sorts are
-  // already audience-weighted.
+  // had. Popularity sorts need the floor too: TMDB's popularity is a
+  // page-traffic score, not a quality signal (without it a 21-vote
+  // B-movie outranked 龙猫 at 9062 votes). Only date sorts are safe.
   //
   // The floor is DYNAMIC: a fixed 500 starves narrow filters (2026 + 日本 +
   // 高分优先 → 0 items, because this year's releases haven't reached 500
@@ -497,7 +512,8 @@ async function handleDiscover(params) {
   }
 
   const endpoint = mediaType === "tv" ? "/discover/tv" : "/discover/movie";
-  const data = sortBy === "vote_average.desc"
+  const needsFloor = sortBy === "vote_average.desc" || sortBy === "popularity.desc";
+  const data = needsFloor
     ? await fetchWithVoteFloor(tmdbParams)
     : await tmdbFetchWithFallback(endpoint, tmdbParams);
   const normalized = await normalizeList(data, mediaType);
@@ -519,7 +535,9 @@ async function handleTrending(params) {
   const page = Number(params.page) || 1;
   const endpoint = `/trending/${mediaType}/${window}`;
   const data = await tmdbFetchWithFallback(endpoint, { page });
-  return normalizeList(data, mediaType);
+  const normalized = await normalizeList(data, mediaType);
+  normalized.list = dropUnreleased(normalized.list);
+  return normalized;
 }
 
 // action=genres

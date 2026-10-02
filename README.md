@@ -45,7 +45,7 @@
 
 本仓库是 **[DecoTV](https://github.com/Decohererk/DecoTV)** 在 **LG webOS 电视**上的专用客户端（非浏览器套壳）。
 
-- 对接已部署的 DecoTV 服务端：豆瓣目录、分类筛选、聚合搜索、多源测速与播放；可选部署 TMDB sidecar 后切换 TMDB 目录
+- 对接已部署的 DecoTV 服务端：聚合搜索、多源测速与播放（豆瓣目录由客户端直连 m.douban.com，不经过服务端）；可选部署 TMDB sidecar 后切换 TMDB 目录
 - 为 TV UI 与遥控器 D-pad 设计焦点导航
 - 使用 webOS 原生 `<video>` **硬件解码 HLS**，不依赖 HLS.js
 - **不需要 root**；开发者模式或 [Homebrew Channel](https://github.com/webosbrew/webos-homebrew-channel) 即可安装

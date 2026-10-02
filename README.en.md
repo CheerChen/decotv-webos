@@ -45,7 +45,7 @@
 
 A **purpose-built webOS TV client** for [DecoTV](https://github.com/Decohererk/DecoTV) — not a browser wrapper.
 
-- Talks to a self-hosted DecoTV server: Douban catalog, category filters, multi-source search, probe ranking, playback; an optional TMDB sidecar switches the catalog to TMDB
+- Talks to a self-hosted DecoTV server: multi-source search, probe ranking, playback (the Douban catalog is fetched directly from m.douban.com, not through the server); an optional TMDB sidecar switches the catalog to TMDB
 - TV UI with remote D-pad focus navigation
 - Native `<video>` **hardware HLS decode** on webOS (no HLS.js)
 - **No root required** — Developer Mode or [Homebrew Channel](https://github.com/webosbrew/webos-homebrew-channel)

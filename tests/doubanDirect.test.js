@@ -5,6 +5,8 @@ import {
   buildRecommendPath,
   mapRexxarItem,
   getRecommendPage,
+  getRecentHotPage,
+  getChartPage,
   _resetForTest
 } from "../js/core/network/doubanDirect.js";
 
@@ -112,6 +114,19 @@ describe("mapRexxarItem", () => {
     const mapped = mapRexxarItem({ id: 2, title: "x", type: "movie" });
     assert.equal(mapped.rate, "");
     assert.equal(mapped.votes, 0);
+  });
+
+  test("subject_collection variant: cover.url poster, year from card_subtitle", () => {
+    const mapped = mapRexxarItem({
+      id: "9", title: "y", type: "movie",
+      cover: { url: "https://img.doubanio.com/c9.jpg" },
+      rating: { value: 7.25, count: 50021 },
+      card_subtitle: "2026 / 中国大陆 / 犯罪 / dir / cast",
+    });
+    assert.equal(mapped.poster, "https://img.doubanio.com/c9.jpg");
+    assert.equal(mapped.rate, "7.3"); // toFixed(1) rounds
+    assert.equal(mapped.year, "2026");
+    assert.equal(mapped.votes, 50021);
   });
 });
 
@@ -232,6 +247,26 @@ describe("getRecommendPage", () => {
     removeLuna();
   });
 
+  test("start=0 on a used paginator replays it instead of failing", async () => {
+    installLuna();
+    // Two batches: 20 high-vote + filler, then another 20 high-vote.
+    const b1 = [], b2 = [];
+    for (let i = 0; i < 60; i++) b1.push(rawItem(i, 500000));
+    for (let i = 60; i < 120; i++) b2.push(rawItem(i, 500000));
+    responseQueue.push(rexxarResponse(b1), rexxarResponse(b2), rexxarResponse(b1));
+
+    const page1 = await getRecommendPage("movie", { sort: "S", start: 0 }, 20);
+    assert.equal(page1.length, 20);
+    // Re-enter the same filter (e.g. user scrolled, left, came back):
+    // served=20 ≠ start=0 used to return null — which now surfaces as
+    // DOUBAN_DIRECT_UNAVAILABLE. It must reset and replay instead.
+    const replay = await getRecommendPage("movie", { sort: "S", start: 0 }, 20);
+    assert.ok(Array.isArray(replay));
+    assert.equal(replay.length, 20); // refilled from upstream, full page
+    assert.ok(replay.every((item) => item.votes >= 10000));
+    removeLuna();
+  });
+
   test("fresh module with start>0 falls back (no mid-stream join)", async () => {
     installLuna();
     assert.equal(await getRecommendPage("movie", { sort: "S", start: 40 }, 20), null);
@@ -279,5 +314,101 @@ describe("circuit breaker", () => {
     assert.equal(await getRecommendPage("movie", q("英国"), 20), null);
     assert.equal(serviceCalls.length, 6);
     removeLuna();
+  });
+});
+
+// ── recent_hot (replaces server /api/douban/categories) ───────────────────
+
+function recentHotResponse(items) {
+  return {
+    returnValue: true,
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ total: items.length, items })
+  };
+}
+
+describe("getRecentHotPage", () => {
+  test("hits the rexxar recent_hot path and maps votes", async () => {
+    installLuna();
+    responseQueue.push(recentHotResponse([
+      { id: "1", title: "番剧A", type: "tv",
+        pic: { normal: "https://img.doubanio.com/p1.jpg" },
+        rating: { value: 8.8, count: 6421 },
+        card_subtitle: "2026 / 日本 / 动画" }
+    ]));
+
+    const list = await getRecentHotPage("tv", "tv", "tv_animation", 0, 24);
+    assert.equal(list.length, 1);
+    assert.equal(list[0].votes, 6421);
+    assert.equal(list[0].rate, "8.8");
+    // recent_hot items carry no `year` — derived from card_subtitle
+    assert.equal(list[0].year, "2026");
+    assert.ok(serviceCalls[0].parameters.path.includes("/rexxar/api/v2/subject/recent_hot/tv"));
+    assert.ok(serviceCalls[0].parameters.path.includes("category=tv"));
+    assert.ok(serviceCalls[0].parameters.path.includes("type=tv_animation"));
+    removeLuna();
+  });
+
+  test("throws without Luna transport", async () => {
+    removeLuna();
+    await assert.rejects(() => getRecentHotPage("tv", "tv", "tv_animation"), /DOUBAN_UNAVAILABLE/);
+  });
+
+  test("throws on bad shape and feeds the breaker", async () => {
+    installLuna();
+    responseQueue.push({ returnValue: true, status: 200, body: "{}" });
+    await assert.rejects(() => getRecentHotPage("tv", "tv", "show"), /DOUBAN_BAD_SHAPE/);
+    removeLuna();
+  });
+});
+
+// ── subject_collection (replaces server /api/douban?type&tag) ─────────────
+
+function collectionResponse(items) {
+  return {
+    returnValue: true,
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ total: items.length, subject_collection_items: items })
+  };
+}
+
+describe("getChartPage", () => {
+  test("热门电影 maps to movie_hot_gaia and maps cover.url items", async () => {
+    installLuna();
+    responseQueue.push(collectionResponse([
+      { id: "5", title: "热门片", type: "movie",
+        cover: { url: "https://img.doubanio.com/c5.jpg" },
+        rating: { value: 7.3, count: 50021 },
+        card_subtitle: "2026 / 中国大陆 / 剧情" }
+    ]));
+
+    const list = await getChartPage("movie", "热门", 0, 24);
+    assert.equal(list.length, 1);
+    assert.equal(list[0].votes, 50021);
+    assert.equal(list[0].poster, "https://img.doubanio.com/c5.jpg");
+    assert.ok(serviceCalls[0].parameters.path.includes("/rexxar/api/v2/subject_collection/movie_hot_gaia/items"));
+    removeLuna();
+  });
+
+  test("热门剧集 maps to tv_hot", async () => {
+    installLuna();
+    responseQueue.push(collectionResponse([]));
+    await getChartPage("tv", "热门", 0, 24);
+    assert.ok(serviceCalls[0].parameters.path.includes("/subject_collection/tv_hot/items"));
+    removeLuna();
+  });
+
+  test("unmapped type+tag combos throw before hitting the network", async () => {
+    installLuna();
+    await assert.rejects(() => getChartPage("movie", "冷门佳片"), /DOUBAN_NO_CHART/);
+    assert.equal(serviceCalls.length, 0);
+    removeLuna();
+  });
+
+  test("throws without Luna transport", async () => {
+    removeLuna();
+    await assert.rejects(() => getChartPage("movie", "热门"), /DOUBAN_UNAVAILABLE/);
   });
 });

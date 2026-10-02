@@ -11,11 +11,11 @@ import { LocalLibrary } from "../../../core/storage/localLibrary.js";
 import { episodeLabel, hasVersionLabels } from "../../../core/network/sourceRanking.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
 import { posterAttrs } from "../../posterImage.js";
-import { escapeHtml, formatTime } from "../../utils.js";
+import { escapeHtml, formatTime, formatVotes } from "../../utils.js";
 
 // Home rows. `fetch` selects the API:
-//   douban     — /api/douban?type&tag  (movie/tv 热门 charts)
-//   categories — /api/douban/categories (anime/show recent-hot charts;
+//   douban     — subject_collection 热门 charts via doubanDirect (rexxar)
+//   categories — recent_hot charts via doubanDirect (rexxar);
 //                same defaults as the 热门动漫 / 热门综艺 tabs)
 // Classic / 最新* rows removed — those live under the category tabs.
 const ROWS = [
@@ -149,7 +149,7 @@ export const HomeScreen = {
       );
       return Array.isArray(data?.list) ? data.list : [];
     }
-    // Default: classic /api/douban chart by type + tag.
+    // Default: subject_collection chart by type + tag (direct).
     const data = await api.getDoubanData(row.type, row.tag, PAGE_SIZE, 0);
     return Array.isArray(data?.list) ? data.list : [];
   },
@@ -254,13 +254,14 @@ export const HomeScreen = {
     const rawPoster = item.poster || "";
     const title = escapeHtml(item.title || "");
     const rate = item.rate ? `<span class="rate-badge">★ ${escapeHtml(item.rate)}</span>` : "";
+    const votes = formatVotes(item.votes);
     const year = item.year ? escapeHtml(item.year) : "";
     return `
       <div class="poster-card focusable" data-action="open-douban" data-title="${title}" data-poster="${escapeHtml(rawPoster)}" data-row="${rowIndex}" data-col="${idx}">
         <img class="poster-img" ${poster} alt="" loading="lazy" onerror="this.style.opacity=0.1" />
         <div class="poster-meta">
           <div class="poster-title">${title}</div>
-          <div class="poster-sub">${rate}${year ? `<span>${year}</span>` : ""}</div>
+          <div class="poster-sub">${rate}${votes ? `<span class="rate-badge">(${votes})</span>` : ""}${year ? `<span>${year}</span>` : ""}</div>
         </div>
       </div>
     `;

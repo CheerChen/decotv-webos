@@ -424,6 +424,7 @@ export function bangumiToCards(calendar, selectedWeekday) {
     title: item.name_cn || item.name,
     poster: item.images?.common || item.images?.medium || item.images?.small || "",
     rate: item.rating?.score ? String(item.rating.score) : "",
+    votes: item.rating?.total || 0,
     year: item.air_date || "",
     _bangumi: true,
   }));

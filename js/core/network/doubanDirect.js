@@ -1,14 +1,19 @@
 // doubanDirect.js — direct Douban catalog access (rexxar) for webOS.
 //
-// The DecoTV server's /api/douban/recommends route proxies m.douban.com's
-// rexxar recommend API but strips everything except id/title/poster/rate/
-// year. That data loss is why the "高分优先" (sort=S) grid drowns in concert
-// films: the rating-count signal that separates a 3k-vote fan concert from a
-// 3M-vote classic never reaches the client. This module goes straight to the
-// rexxar API through the Luna service (which injects the Referer the webview
-// cannot send), filters with a generic vote-count floor, and keeps the exact
-// upstream response shape so callers fall back to the DecoTV server path on
-// any failure — direct access is an optimization, never a dependency.
+// The DecoTV server's /api/douban* routes proxy Douban but strip everything
+// except id/title/poster/rate/year. That data loss is why the "高分优先"
+// (sort=S) grid drowns in concert films: the rating-count signal that
+// separates a 3k-vote fan concert from a 3M-vote classic never reaches the
+// client. This module is now the ONLY Douban catalog path: all three server
+// routes are replaced by rexxar endpoints on m.douban.com, fetched through
+// the Luna service (which injects the Referer the webview cannot send):
+//
+//   /api/douban?type&tag        → /rexxar/api/v2/subject_collection/{id}/items
+//   /api/douban/categories      → /rexxar/api/v2/subject/recent_hot/{kind}
+//   /api/douban/recommends      → /rexxar/api/v2/{kind}/recommend
+//
+// There is no server fallback — a direct failure surfaces as an error so
+// the UI shows 加载失败 rather than a silent empty grid.
 //
 // No content-based special-casing: the vote floor is the only filter. A
 // concert film is filtered because its audience is small, not because it is
@@ -40,7 +45,8 @@ const HUNGRY_STEP_THRESHOLD = 2;
 const MAX_FETCHES_PER_PAGE = 25;
 
 // Circuit breaker: after this many consecutive direct failures, stop trying
-// direct for the cooldown window and go straight to the server fallback.
+// direct for the cooldown window — requests fail fast instead of paying a
+// 12s timeout per catalog row.
 const BREAKER_THRESHOLD = 3;
 const BREAKER_COOLDOWN_MS = 10 * 60 * 1000;
 
@@ -97,17 +103,19 @@ export function buildRecommendPath(kind, opts, start, count) {
 
 // Map a rexxar item to the DoubanItem shape the app already renders, plus
 // the two fields the server route drops: votes (rating.count) and subtitle
-// (card_subtitle). Extra fields are ignored by the UI, so the server
-// fallback list remains fully compatible.
+// (card_subtitle). Item shape differs slightly by endpoint: recommend and
+// recent_hot carry `pic` + `year`, subject_collection items carry
+// `cover.url` and derive year from card_subtitle instead.
 export function mapRexxarItem(item) {
+  const subtitle = item.card_subtitle || "";
   return {
     id: String(item.id),
     title: item.title,
-    poster: item.pic?.normal || item.pic?.large || "",
+    poster: item.pic?.normal || item.pic?.large || item.cover?.url || "",
     rate: item.rating?.value ? Number(item.rating.value).toFixed(1) : "",
-    year: item.year || "",
+    year: item.year ? String(item.year) : (subtitle.match(/(\d{4})/)?.[1] || ""),
     votes: item.rating?.count || 0,
-    subtitle: item.card_subtitle || ""
+    subtitle
   };
 }
 
@@ -134,9 +142,7 @@ class RecommendPaginator {
 
   async fetchUpstream() {
     const path = buildRecommendPath(this.kind, this.opts, this.upstreamStart, UPSTREAM_BATCH);
-    const response = await lunaDoubanFetch(path, { timeoutMs: 12000 });
-    if (!response.ok) throw new Error(`DOUBAN_HTTP_${response.status}`);
-    const data = await response.json();
+    const data = await doubanGet(path);
     if (!data || !Array.isArray(data.items)) throw new Error("DOUBAN_BAD_SHAPE");
     return data.items
       .filter((item) => item && (item.type === "movie" || item.type === "tv"))
@@ -230,9 +236,16 @@ function getPaginator(kind, opts, pageSize, start) {
 
   if (paginator) {
     // Offset divergence (restored snapshot, aborted load): the paginator
-    // cannot jump to an arbitrary filtered offset — let the caller use the
-    // server route for this request.
-    if (paginator.served !== start) return null;
+    // cannot jump to an arbitrary filtered offset. A fresh page-0 request
+    // can be served by replaying — reset and refill from upstream.
+    // Anything else ends the list rather than serving a gap.
+    if (paginator.served !== start) {
+      if (start === 0) {
+        paginator.reset();
+        return paginator;
+      }
+      return null;
+    }
     return paginator;
   }
 
@@ -250,8 +263,18 @@ function getPaginator(kind, opts, pageSize, start) {
   return created;
 }
 
+// Low-level rexxar GET shared by all three catalog paths. The service
+// injects the m.douban.com Referer and applies its own TTL cache.
+async function doubanGet(path) {
+  const response = await lunaDoubanFetch(path, { timeoutMs: 12000 });
+  if (!response.ok) throw new Error(`DOUBAN_HTTP_${response.status}`);
+  return response.json();
+}
+
 // Returns a page (array) on success, or null when direct access is
-// unavailable/failed — the caller falls back to the DecoTV server route.
+// unavailable/failed or the requested offset cannot be served — there is
+// no server fallback, so the caller treats null per context (page-0 load
+// fails loudly; a mid-stream gap just ends the list).
 export async function getRecommendPage(kind, opts = {}, pageSize = 24) {
   if (!directAvailable()) return null;
 
@@ -268,6 +291,64 @@ export async function getRecommendPage(kind, opts = {}, pageSize = 24) {
     paginator.reset();
     noteFailure();
     return null;
+  }
+}
+
+// Recent-hot chart — replaces the server's /api/douban/categories route
+// (upstream: m.douban.com/rexxar/api/v2/subject/recent_hot/{kind}). Items
+// share the recommend shape, so mapRexxarItem applies directly. Unlike
+// recommend there is no vote floor: recent_hot is a small curated list
+// (tens of items), not an open pool. Throws on failure.
+export async function getRecentHotPage(kind, category, type, start = 0, count = 24) {
+  if (!directAvailable()) throw new Error("DOUBAN_UNAVAILABLE");
+  const params = new URLSearchParams({
+    start: String(start),
+    limit: String(count),
+    category: String(category || ""),
+    type: String(type || ""),
+  });
+  try {
+    const data = await doubanGet(`/rexxar/api/v2/subject/recent_hot/${kind}?${params}`);
+    if (!data || !Array.isArray(data.items)) throw new Error("DOUBAN_BAD_SHAPE");
+    noteSuccess();
+    return data.items
+      .filter((item) => item && (item.type === "movie" || item.type === "tv"))
+      .map(mapRexxarItem);
+  } catch (e) {
+    noteFailure();
+    throw e;
+  }
+}
+
+// Subject-collection chart — replaces the server's /api/douban?type&tag
+// route (upstream there was movie.douban.com/j/search_subjects, which
+// carries no rating count and no year). The rexxar subject_collection
+// endpoints are the same 热门 charts the m-site shows and do carry
+// rating.count. Items live under `subject_collection_items` and use
+// `cover.url` (no `pic`) — mapRexxarItem covers both. Throws on failure.
+const CHART_COLLECTIONS = {
+  "movie:热门": "movie_hot_gaia",
+  "tv:热门": "tv_hot",
+};
+
+export async function getChartPage(type, tag, start = 0, count = 24) {
+  const collection = CHART_COLLECTIONS[`${type}:${tag}`];
+  if (!collection) throw new Error(`DOUBAN_NO_CHART_${type}_${tag}`);
+  if (!directAvailable()) throw new Error("DOUBAN_UNAVAILABLE");
+  const params = new URLSearchParams({
+    start: String(start),
+    count: String(count),
+  });
+  try {
+    const data = await doubanGet(`/rexxar/api/v2/subject_collection/${collection}/items?${params}`);
+    if (!data || !Array.isArray(data.subject_collection_items)) throw new Error("DOUBAN_BAD_SHAPE");
+    noteSuccess();
+    return data.subject_collection_items
+      .filter((item) => item && (item.type === "movie" || item.type === "tv"))
+      .map(mapRexxarItem);
+  } catch (e) {
+    noteFailure();
+    throw e;
   }
 }
 

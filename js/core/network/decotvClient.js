@@ -5,7 +5,11 @@
 // Browser/dev preview falls back to fetch().
 
 import { LocalStore } from "../storage/localStore.js";
-import { getRecommendPage as doubanRecommendDirect } from "./doubanDirect.js";
+import {
+  getChartPage as doubanChartDirect,
+  getRecentHotPage as doubanRecentHotDirect,
+  getRecommendPage as doubanRecommendDirect,
+} from "./doubanDirect.js";
 import {
   clearLunaSession,
   getLunaSession,
@@ -167,33 +171,32 @@ export class DecoTVClient {
   }
 
   // ── Catalog (Douban) ────────────────────────────────────────────────────
-  // Verified shape: { code:200, message, list:[{id,title,poster,rate,year}] }
+  // All Douban catalog paths go direct to m.douban.com's rexxar API via the
+  // Luna service (doubanDirect) — the server routes drop votes/year, so the
+  // server is no longer involved. Shape: { code:200, message, list:[
+  //   {id,title,poster,rate,year,votes,subtitle} ] }. Failures throw so the
+  // UI shows 加载失败 rather than a silent empty grid.
 
+  // Home hot charts (热门电影 / 热门剧集). Backed by rexxar
+  // subject_collection — the server route's upstream (search_subjects)
+  // carries neither votes nor year.
   async getDoubanData(type, tag, pageSize = 24, pageStart = 0) {
-    const url = `/api/douban?type=${encodeURIComponent(type)}&tag=${encodeURIComponent(tag)}&pageSize=${pageSize}&pageStart=${pageStart}`;
-    const response = await this._fetch(url);
-    return response.json();
+    const list = await doubanChartDirect(type, tag, pageStart, pageSize);
+    return { code: 200, message: "获取成功", list };
   }
 
-  // Douban sub-category API (tv/show with region/type filters).
-  // kind: "tv" | "movie", category: e.g. "最近热门", type: e.g. "tv", "tv_domestic", "show"
+  // Douban sub-category API (tv/show with region/type filters) — recent_hot
+  // chart direct. kind: "tv" | "movie", category: e.g. "tv", "show",
+  // type: e.g. "tv_animation", "tv_documentary", "show"
   async getDoubanCategories(kind, category, type, limit = 24, start = 0) {
-    const params = new URLSearchParams({
-      kind, category, type,
-      limit: String(limit),
-      start: String(start),
-      proxyType: "auto",
-    });
-    const response = await this._fetch(`/api/douban/categories?${params}`);
-    return response.json();
+    const list = await doubanRecentHotDirect(kind, category, type, start, limit);
+    return { code: 200, message: "获取成功", list };
   }
 
-  // Douban recommends API (anime 番剧/剧场版, movie/tv "全部" with multi-level filters).
-  // Direct-first: on webOS the request goes straight to Douban's rexxar API
-  // via the Luna service (doubanDirect). That path keeps the rating count
-  // per item, which lets a generic vote floor filter the concert-film noise
-  // out of the sort=S grid, and it works even when the server is slow. Any
-  // failure falls back to the server route — identical shape, no votes.
+  // Douban recommends API (anime 番剧/剧场版, movie/tv "全部" with multi-level
+  // filters). Straight to Douban's rexxar API via the Luna service
+  // (doubanDirect). That path keeps the rating count per item, which lets a
+  // generic vote floor filter the concert-film noise out of the sort=S grid.
   async getDoubanRecommends(kind, opts = {}) {
     const direct = await doubanRecommendDirect(
       kind,
@@ -203,22 +206,12 @@ export class DecoTVClient {
     if (Array.isArray(direct)) {
       return { code: 200, message: "获取成功", list: direct };
     }
-
-    const params = new URLSearchParams({
-      kind,
-      limit: String(opts.limit || 24),
-      start: String(opts.start || 0),
-      category: opts.category || "",
-      format: opts.format || "",
-      label: opts.label || "",
-      region: opts.region || "",
-      year: opts.year || "",
-      platform: opts.platform || "",
-      sort: opts.sort || "",
-      proxyType: "auto",
-    });
-    const response = await this._fetch(`/api/douban/recommends?${params}`);
-    return response.json();
+    // Mid-stream offset the paginator cannot join (restored snapshot, new
+    // process): end the list quietly instead of erroring auto-load.
+    if (Number(opts.start || 0) > 0) {
+      return { code: 200, message: "获取成功", list: [] };
+    }
+    throw new Error("DOUBAN_DIRECT_UNAVAILABLE");
   }
 
   // Bangumi calendar API (anime "每日放送" — per-weekday anime list).

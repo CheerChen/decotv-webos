@@ -24,14 +24,92 @@ export async function bootToHome(page) {
   // 3) Fake the entire decotv API.
   await page.route("**/api/**", (route) => handleApi(route, state));
 
-  // 4) Seed "server configured + anonymous public session".
-  //    LocalStore JSON-stringifies every value, plain strings included.
-  await page.addInitScript(({ config }) => {
+  // 4) Seed "server configured + anonymous public session" and fake the
+  //    Luna bus. LocalStore JSON-stringifies every value, plain strings
+  //    included. The webOS.service.request stub is required because the
+  //    Douban catalog no longer calls /api/douban* — it goes through the
+  //    service's fetchDouban (rexxar, m.douban.com).
+  await page.addInitScript(({ config, movieItems, pngB64 }) => {
     localStorage.setItem("decotv.apiBaseUrl", JSON.stringify("http://127.0.0.1:4173"));
     localStorage.setItem("decotv.serverConfig", JSON.stringify(config));
     localStorage.setItem("decotv.local.playRecords.migratedVersion", JSON.stringify("2"));
     localStorage.setItem("decotv.lang", JSON.stringify("zh-CN"));
-  }, { config: SERVER_CONFIG });
+
+    const CANCEL = { cancel() {} };
+    window.webOS = {
+      service: {
+        request(_uri, options) {
+          const p = options.parameters || {};
+          const ok = (r) => options.onSuccess(r);
+          const fail = (e) => options.onFailure({ errorText: String(e) });
+
+          if (options.method === "request") {
+            // Authenticated API proxy — forward to fetch so the **/api/**
+            // route mocks above still serve it.
+            fetch(new URL(p.path, p.baseUrl).href, {
+              method: p.method || "GET",
+              headers: p.contentType ? { "Content-Type": p.contentType } : undefined,
+              body: p.body || undefined,
+            }).then(async (res) => ok({
+              returnValue: true,
+              status: res.status,
+              contentType: res.headers.get("content-type") || "",
+              body: await res.text(),
+            })).catch(fail);
+            return CANCEL;
+          }
+          if (options.method === "fetchDouban") {
+            const path = String(p.path || "");
+            let body;
+            if (path.includes("/subject_collection/movie_hot_gaia")) {
+              body = { total: movieItems.length, subject_collection_items: movieItems };
+            } else if (path.includes("/subject_collection/")) {
+              body = { total: 0, subject_collection_items: [] };
+            } else if (path.includes("/subject/recent_hot/") || path.includes("/recommend")) {
+              body = { total: 0, items: [] };
+            } else {
+              fail(`unhandled rexxar path: ${path}`);
+              return CANCEL;
+            }
+            ok({ returnValue: true, status: 200, contentType: "application/json", body: JSON.stringify(body) });
+            return CANCEL;
+          }
+          if (options.method === "fetchImage") {
+            ok({ returnValue: true, base64: pngB64, contentType: "image/png", source: "proxy" });
+            return CANCEL;
+          }
+          if (options.method === "diagnostics") {
+            ok({ returnValue: true, hasSession: false, cookieKeys: [], images: null });
+            return CANCEL;
+          }
+          if (options.method === "clearSession") { ok({ returnValue: true }); return CANCEL; }
+          if (options.method === "getM3u8ProxyPort") {
+            ok({ returnValue: true, ready: false, port: 0 });
+            return CANCEL;
+          }
+          if (options.method === "fetchSidecar") {
+            fail("no sidecar in e2e");
+            return CANCEL;
+          }
+          fail(`unhandled luna method: ${options.method}`);
+          return CANCEL;
+        },
+      },
+    };
+  }, {
+    config: SERVER_CONFIG,
+    pngB64: PNG_1X1.toString("base64"),
+    // rexxar subject_collection item shape: cover.url (no pic), year inside
+    // card_subtitle, rating.value + rating.count.
+    movieItems: HOME_MOVIE_CARDS.map((c) => ({
+      id: c.id,
+      title: c.title,
+      type: "movie",
+      cover: { url: c.poster },
+      rating: { value: Number(c.rate), count: 12345 },
+      card_subtitle: `${c.year} / e2e`,
+    })),
+  });
 
   await page.goto("/index.html");
   await page.waitForFunction(

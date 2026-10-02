@@ -22,7 +22,7 @@ import { tmdb } from "../../../core/network/tmdbClient.js";
 import { getProvider, setProvider } from "../../../core/storage/catalogProvider.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
 import { posterAttrs } from "../../posterImage.js";
-import { escapeHtml } from "../../utils.js";
+import { escapeHtml, formatVotes } from "../../utils.js";
 import { showToast } from "../../toast.js";
 import { TYPE_CONFIGS, WEEKDAYS, todayWeekday, bangumiToCards } from "./browseConfig.js";
 
@@ -441,7 +441,8 @@ export const SearchScreen = {
     const title = escapeHtml(r.title || r.name_cn || r.name || "");
     const year = escapeHtml(r.year || "");
     const rate = r.rate ? `<span class="rate-badge">★ ${escapeHtml(r.rate)}</span>` : "";
-    const sub = `${rate}${year ? `<span>${year}</span>` : ""}`;
+    const votes = formatVotes(r.votes);
+    const sub = `${rate}${votes ? `<span class="rate-badge">(${votes})</span>` : ""}${year ? `<span>${year}</span>` : ""}`;
     return `
       <div class="poster-card focusable" data-action="open-douban" data-index="${i}">
         <img class="poster-img" ${poster} alt="" loading="lazy" onerror="this.style.opacity=0.1" />
