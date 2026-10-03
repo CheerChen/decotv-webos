@@ -41,6 +41,7 @@ js/ui/navigation/screen.js
 js/ui/posterImage.js
 js/ui/probeLabel.js
 js/ui/screens/detail/detailScreen.js
+js/ui/screens/detail/relatedTitles.js
 js/ui/screens/home/homeScreen.js
 js/ui/screens/library/libraryScreen.js
 js/ui/screens/login/loginScreen.js

@@ -44,6 +44,7 @@ import { normalizeWork, rememberWork, lookupWork } from "../../../core/catalog/w
 import { getWorkDetails, getWorkBackdrop } from "../../../core/catalog/workDetails.js";
 import { getHeroStyle } from "../../../core/storage/heroStyle.js";
 import { loadEpisodeMeta } from "../../../core/catalog/episodeMeta.js";
+import { relatedKeyword, filterRelatedResults, excludeRelated } from "./relatedTitles.js";
 
 // Monochrome play glyph for the primary action (inherits color via currentColor).
 const PLAY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
@@ -456,13 +457,11 @@ export const DetailScreen = {
     }
   },
 
-  // Related-series badges: take the first space-separated segment of the
-  // current title as a search keyword, hit /api/search once, and render every
-  // distinct result (deduplicated by title, filtered to prefix matches,
-  // excluding the current title) as a jump badge. Each badge carries the full
-  // search result so clicking it enters detail in single-source mode with no
-  // re-search. No heuristic guessing — the server returns only titles that
-  // actually have playable sources.
+  // Related-series badges: search the series' base title once (see
+  // relatedTitles.js — season marker dropped, part before the first space)
+  // and render every distinct listing that starts with it, minus the work on
+  // screen, as a jump badge. No heuristic guessing — the server returns only
+  // titles that actually have playable sources.
   _relatedResults: [],
   _relatedKeyword: "",   // dedup guard: keyword already searched this mount
 
@@ -475,15 +474,11 @@ export const DetailScreen = {
     const wrap = this.container?.querySelector("#detailRelated");
     const badgesEl = this.container?.querySelector("#detailRelatedBadges");
     if (!wrap || !badgesEl) return;
-    const fullTitle = this.currentSource?.title
-      || this.currentSource?.search_title
-      || this.title
-      || "";
-    // The keyword is the first space-separated segment if the title has a
-    // space, otherwise the full title. A bare title like "进击的巨人" is a
-    // valid keyword — searching it returns adjacent seasons / derivatives.
-    const sp = fullTitle.indexOf(" ");
-    const keyword = (sp > 0 ? fullTitle.slice(0, sp) : fullTitle).trim();
+    // The keyword comes from the title the page was opened with, not from
+    // whichever source is current: a source may spell the season without
+    // the space, and the keyword then changed between the first visit and
+    // Back from the player (badges appearing, then vanishing).
+    const keyword = relatedKeyword(this.title || this.currentSource?.title || this.currentSource?.search_title);
     if (!keyword) { wrap.style.display = "none"; return; }
 
     // Dedup within a single mount: several lifecycle sites may reach this,
@@ -494,64 +489,39 @@ export const DetailScreen = {
     // Cache hit → render immediately, no network request. The cache is keyed
     // by keyword, so the same keyword never fetches twice across visits.
     const cached = getCachedRelated(keyword);
-    if (cached) {
-      this._renderRelatedBadges(cached, fullTitle, wrap, badgesEl);
+    if (cached?.length) {
+      this._renderRelatedBadges(cached, wrap, badgesEl);
       return;
     }
 
-    // Bare titles have no space-separated segment, so the main source search
-    // used the same keyword this mount — reuse its raw response instead of
-    // issuing a second identical /api/search.
+    // A title with no season marker and no space is its own keyword, so the
+    // main source search used it this mount — reuse its raw response instead
+    // of issuing a second identical /api/search.
     if (this._lastSearchKeyword === keyword && this._lastSearchData) {
-      const related = this._filterRelatedResults(this._lastSearchData, keyword, fullTitle);
-      setCachedRelated(keyword, related);
-      this._renderRelatedBadges(related, fullTitle, wrap, badgesEl);
+      this._storeAndRenderRelated(keyword, filterRelatedResults(this._lastSearchData, keyword), wrap, badgesEl);
       return;
     }
 
     const epoch = this._mountEpoch;
     api.searchVideos(keyword).then((data) => {
       if (epoch !== this._mountEpoch) return; // stale — user navigated away
-      const related = this._filterRelatedResults(data, keyword, fullTitle);
-      setCachedRelated(keyword, related);
-      this._renderRelatedBadges(related, fullTitle, wrap, badgesEl);
+      this._storeAndRenderRelated(keyword, filterRelatedResults(data, keyword), wrap, badgesEl);
     }).catch(() => {
       if (epoch !== this._mountEpoch) return;
       wrap.style.display = "none";
     });
   },
 
-  // Filter + dedup + sort the raw search response into a badge-ready list.
-  _filterRelatedResults(data, keyword, fullTitle) {
-    const results = Array.isArray(data?.results) ? data.results : [];
-    const byTitle = new Map();
-    const baseLen = keyword.length;
-    for (const r of results) {
-      const t = (r.title || "").trim();
-      if (!t) continue;
-      if (!t.startsWith(keyword)) continue;
-      if (t === fullTitle.trim()) continue;
-      if (t.length > baseLen * 3 + 6) continue;
-      const prev = byTitle.get(t);
-      const prevEps = prev && Array.isArray(prev.episodes) ? prev.episodes.length : 0;
-      const curEps = Array.isArray(r.episodes) ? r.episodes.length : 0;
-      if (!prev || curEps > prevEps) byTitle.set(t, r);
-    }
-    return Array.from(byTitle.values()).sort((a, b) => {
-      const ea = Array.isArray(a.episodes) ? a.episodes.length : 0;
-      const eb = Array.isArray(b.episodes) ? b.episodes.length : 0;
-      if (eb !== ea) return eb - ea;
-      const ya = Number(a.year) || 0;
-      const yb = Number(b.year) || 0;
-      return yb - ya;
-    }).slice(0, 12);
+  // The aggregated server search answers differently from call to call; an
+  // empty answer is not cached, or one bad search would hide the badges for
+  // the cache's whole 24 h.
+  _storeAndRenderRelated(keyword, related, wrap, badgesEl) {
+    if (related.length) setCachedRelated(keyword, related);
+    this._renderRelatedBadges(related, wrap, badgesEl);
   },
 
-  // Render the badge row from a (possibly cached) result list. The current
-  // title is excluded at render time so a cached list stays correct even when
-  // the user navigates between seasons of the same series.
-  _renderRelatedBadges(related, fullTitle, wrap, badgesEl) {
-    const filtered = related.filter((r) => (r.title || "").trim() !== fullTitle.trim());
+  _renderRelatedBadges(related, wrap, badgesEl) {
+    const filtered = excludeRelated(related, [this.title, this.currentSource?.title, this.currentSource?.search_title]);
     this._relatedResults = filtered;
     if (!filtered.length) {
       wrap.style.display = "none";

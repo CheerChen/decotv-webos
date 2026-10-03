@@ -16,7 +16,11 @@
 
 import { LocalStore } from "./localStore.js";
 
-const RELATED_KEY = "decotv.cache.related";
+// v2: entries are de-duplicated by normalized title and never empty. The
+// v1 store held raw-title duplicates ("<题名> 第五季" next to "<题名>第五季")
+// and empty answers that hid the badges for a day; it is dropped on load.
+const RELATED_KEY = "decotv.cache.related.v2";
+const LEGACY_RELATED_KEY = "decotv.cache.related";
 const DETAIL_KEY = "decotv.cache.detail";
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -48,7 +52,13 @@ function writeCache(storageKey, entryKey, value) {
 
 // ── Related titles ────────────────────────────────────────────────────────
 
+let legacyRelatedCleared = false;
+
 export function getCachedRelated(keyword) {
+  if (!legacyRelatedCleared) {
+    legacyRelatedCleared = true;
+    try { LocalStore.remove(LEGACY_RELATED_KEY); } catch (_) { /* storage unavailable */ }
+  }
   return readCache(RELATED_KEY, keyword);
 }
 
