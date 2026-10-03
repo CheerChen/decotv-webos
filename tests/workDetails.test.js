@@ -94,7 +94,7 @@ describe("provider detail normalization", () => {
   test("bangumi subject: meta tags minus medium/region, director from infobox", () => {
     const d = normalizeBangumiSubject({
       id: 3, name: "原名", name_cn: "中文名", date: "2026-10-01", summary: "s",
-      rating: { score: 7.1, total: 649 }, meta_tags: ["日本", "TV", "漫画改", "奇幻", "战斗", "恋爱"],
+      rating: { score: 7.1, total: 649 }, meta_tags: ["日本", "TV", "漫画改", "漫画改", "奇幻", "战斗", "恋爱"],
       total_episodes: 12, infobox: [{ key: "导演", value: "导演甲" }], images: { large: "https://img.example/l.jpg" },
     });
     assert.equal(d.title, "中文名");

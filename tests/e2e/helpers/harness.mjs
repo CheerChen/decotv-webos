@@ -1,5 +1,5 @@
 // tests/e2e/helpers/harness.mjs — boot the app in Chromium with a fake backend.
-import { CATALOG, PROBES, RESOLVE_FAILS, HOME_MOVIE_CARDS, SERVER_CONFIG, DOUBAN_SUBJECT_1001 } from "../fixtures/data.mjs";
+import { CATALOG, PROBES, RESOLVE_FAILS, HOME_MOVIE_CARDS, SERVER_CONFIG, DOUBAN_SUBJECT_1001, TMDB_TV_777 } from "../fixtures/data.mjs";
 
 const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
@@ -29,7 +29,7 @@ export async function bootToHome(page) {
   //    included. The webOS.service.request stub is required because the
   //    Douban catalog no longer calls /api/douban* — it goes through the
   //    service's fetchDouban (rexxar, m.douban.com).
-  await page.addInitScript(({ config, movieItems, pngB64, doubanSubject }) => {
+  await page.addInitScript(({ config, movieItems, pngB64, doubanSubject, tmdbTv }) => {
     localStorage.setItem("decotv.apiBaseUrl", JSON.stringify("http://127.0.0.1:4173"));
     localStorage.setItem("decotv.serverConfig", JSON.stringify(config));
     localStorage.setItem("decotv.local.playRecords.migratedVersion", JSON.stringify("2"));
@@ -94,7 +94,16 @@ export async function bootToHome(page) {
             return CANCEL;
           }
           if (options.method === "fetchTmdb") {
-            fail("no TMDB in e2e");
+            // One TMDB tv work (details + season 1); every other path fails.
+            const path = new URL(String(p.path || ""), "https://api.themoviedb.org").pathname;
+            const body = path === `/3/tv/${tmdbTv.details.id}` ? tmdbTv.details
+              : path === `/3/tv/${tmdbTv.details.id}/season/1` ? tmdbTv.season1
+              : null;
+            if (body) {
+              ok({ returnValue: true, status: 200, contentType: "application/json", body: JSON.stringify(body) });
+              return CANCEL;
+            }
+            fail("no such TMDB fixture");
             return CANCEL;
           }
           fail(`unhandled luna method: ${options.method}`);
@@ -106,6 +115,7 @@ export async function bootToHome(page) {
     config: SERVER_CONFIG,
     pngB64: PNG_1X1.toString("base64"),
     doubanSubject: DOUBAN_SUBJECT_1001,
+    tmdbTv: TMDB_TV_777,
     // rexxar subject_collection item shape: cover.url (no pic), year inside
     // card_subtitle, rating.value + rating.count.
     movieItems: HOME_MOVIE_CARDS.map((c) => ({

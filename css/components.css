@@ -265,6 +265,71 @@
   box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
+/* Episode cards with stills (TMDB / Bangumi works). A horizontal rail like
+   the home rows; the same padding/negative-margin trick keeps the scaled
+   focus ring from being clipped by overflow-x. */
+.episodes-list.stills {
+  display: flex;
+  gap: 20px;
+  max-height: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 14px 18px 26px;
+  margin: -6px -12px 12px;
+  scroll-padding: 0 18px;
+}
+
+.episode-card {
+  flex: 0 0 300px;
+  box-sizing: border-box;
+  background: var(--bg-elev);
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.episode-still {
+  display: block;
+  width: 300px;
+  height: 169px;
+  object-fit: cover;
+  background: var(--bg-elev-2);
+}
+
+.episode-card-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px 12px;
+  font-size: 18px;
+  color: var(--text-color);
+}
+
+.episode-card-no {
+  font-size: 16px;
+  color: var(--text-dim);
+}
+
+.episode-card-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.episode-card.resume {
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.episode-card.resume .episode-card-no {
+  color: var(--accent);
+}
+
+.episode-card.focused {
+  transform: scale(1.05);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
 .source-pill {
   display: inline-block;
   background: var(--bg-elev-2);

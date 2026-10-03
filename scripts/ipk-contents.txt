@@ -9,6 +9,7 @@ css/layout.css
 index.html
 js/app.js
 js/core/auth/authManager.js
+js/core/catalog/episodeMeta.js
 js/core/catalog/work.js
 js/core/catalog/workDetails.js
 js/core/i18n.js

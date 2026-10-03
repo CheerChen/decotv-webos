@@ -71,6 +71,24 @@ export const DOUBAN_SUBJECT_1001 = {
   pic: { large: "https://poster.example/a.jpg" },
 };
 
+// TMDB tv work for the test series: details (with its season list) and
+// season 1 episodes — stills for 1 and 3, a placeholder name for 2.
+export const TMDB_TV_777 = {
+  details: {
+    id: 777, name: "测试剧集", first_air_date: "2024-01-01", overview: "E2E TMDB 概要",
+    vote_average: 8.0, vote_count: 321, genres: [{ name: "剧情" }],
+    credits: { crew: [], cast: [] },
+    seasons: [{ season_number: 1, name: "第 1 季", air_date: "2024-01-01", episode_count: 3 }],
+  },
+  season1: {
+    episodes: [
+      { episode_number: 1, name: "E2E 第一夜", still_path: "/e1.jpg" },
+      { episode_number: 2, name: "第 2 集", still_path: null },
+      { episode_number: 3, name: "E2E 第三夜", still_path: "/e3.jpg" },
+    ],
+  },
+};
+
 // Home 热门电影 chart (row 0). Home cards pass title (no year) to detail.
 // Ids are numeric like real douban subject ids: a card only carries a work
 // id (and the details page only asks douban) when the id is numeric.

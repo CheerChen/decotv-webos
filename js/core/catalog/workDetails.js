@@ -45,6 +45,11 @@ function names(list, max = Infinity) {
     .slice(0, max);
 }
 
+// Providers repeat tags (Bangumi meta tags were seen doubled on device).
+function uniqueGenres(list) {
+  return [...new Set(list.map((g) => String(g || "").trim()).filter(Boolean))].slice(0, MAX_GENRES);
+}
+
 function rating(source, value, votes) {
   const v = Number(value);
   if (!Number.isFinite(v) || v <= 0) return null;
@@ -64,7 +69,7 @@ export function normalizeDoubanSubject(s) {
     year: String(s.year || ""),
     summary: String(s.intro || "").trim(),
     rating: rating("豆瓣", s.rating?.value, s.rating?.count),
-    genres: (s.genres || []).map(String).slice(0, MAX_GENRES),
+    genres: uniqueGenres(s.genres || []),
     duration: String((s.durations || [])[0] || "").replace(/\s+/g, ""),
     episodes: Number(s.episodes_count) || 0,
     directors: names(s.directors),
@@ -84,7 +89,7 @@ export function normalizeTmdbDetails(d, kind) {
     year: String(d.release_date || d.first_air_date || "").slice(0, 4),
     summary: String(d.overview || "").trim(),
     rating: rating("TMDB", d.vote_average, d.vote_count),
-    genres: names(d.genres, MAX_GENRES).map((g) => TMDB_GENRE_ZH[g] || g),
+    genres: uniqueGenres(names(d.genres).map((g) => TMDB_GENRE_ZH[g] || g)),
     duration: minutes(d.runtime || (d.episode_run_time || [])[0]),
     episodes: kind === "tv" ? Number(d.number_of_episodes) || 0 : 0,
     directors: directors.length ? directors : names(d.created_by),
@@ -132,7 +137,7 @@ export function chineseSummary(text) {
 
 export function normalizeBangumiSubject(s) {
   if (!s || !s.id) return null;
-  const genres = (s.meta_tags || []).map(String).filter((t) => !BANGUMI_NON_GENRE_TAGS.has(t)).slice(0, MAX_GENRES);
+  const genres = uniqueGenres((s.meta_tags || []).map(String).filter((t) => !BANGUMI_NON_GENRE_TAGS.has(t)));
   return {
     provider: "bangumi",
     title: String(s.name_cn || s.name || ""),

@@ -42,6 +42,7 @@ import {
 } from "../../../core/storage/detailCache.js";
 import { normalizeWork, rememberWork, lookupWork } from "../../../core/catalog/work.js";
 import { getWorkDetails } from "../../../core/catalog/workDetails.js";
+import { loadEpisodeMeta } from "../../../core/catalog/episodeMeta.js";
 
 // Monochrome play glyph for the primary action (inherits color via currentColor).
 const PLAY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
@@ -114,6 +115,8 @@ export const DetailScreen = {
     // card, else from the local map (continue watching, favorites, Back).
     this.work = normalizeWork(params.work) || lookupWork(this.title, this.year);
     this.workDetails = null;
+    this.episodeMeta = null;      // Map index -> { still, title } for currentSource
+    this._episodeMetaFor = "";    // probe key of the source the meta belongs to
     if (this.work && params.work) rememberWork(this.title, this.year, this.work);
 
     this._renderSkeleton();
@@ -164,6 +167,25 @@ export const DetailScreen = {
     this.workDetails = details;
     if (!this.poster && details.poster) this._setPoster(details.poster);
     this._renderHeroMeta();
+    this._ensureEpisodeMeta();
+  },
+
+  // Episode stills / official titles for the playing source, from the work's
+  // provider (TMDB tv, Bangumi). Re-requested when the source changes, since
+  // sources may list different seasons. Until (unless) it lands, the text
+  // buttons stay.
+  async _ensureEpisodeMeta() {
+    const src = this.currentSource;
+    if (!this.work || !this.workDetails || !src || !Array.isArray(src.episodes) || src.episodes.length <= 1) return;
+    const forKey = getSourceProbeKey(src);
+    if (this._episodeMetaFor === forKey) return;
+    this._episodeMetaFor = forKey;
+    this.episodeMeta = null;
+    const epoch = this._mountEpoch;
+    const meta = await loadEpisodeMeta(this.work, this.workDetails, src);
+    if (epoch !== this._mountEpoch || this._episodeMetaFor !== forKey || !meta.size) return;
+    this.episodeMeta = meta;
+    this._renderEpisodes();
   },
 
   _saveCache() {
@@ -697,11 +719,44 @@ export const DetailScreen = {
     if (hint) {
       hint.textContent = `共 ${eps.length} 集${resumeIdx >= 0 ? ` · 上次看到第 ${resumeIdx + 1} 集` : ""}`;
     }
-    list.style.display = "grid";
-    list.innerHTML = eps.map((_, i) => `
+    // Re-rendering replaces the nodes; keep the focused episode focused.
+    const focusedEp = list.querySelector(".focused");
+    const focusedIndex = focusedEp ? Number(focusedEp.dataset.index) : -1;
+    const meta = this._episodeMetaFor === getSourceProbeKey(src) ? this.episodeMeta : null;
+    if (meta?.size) {
+      list.classList.add("stills");
+      list.style.display = "flex";
+      // A provider without artwork (Bangumi) gets title cards with no image
+      // area; with artwork, an episode lacking a still keeps a blank face so
+      // the rail stays aligned.
+      const anyStill = [...meta.values()].some((m) => m.still);
+      list.innerHTML = eps.map((_, i) => {
+        const m = meta.get(i) || { still: "", title: "" };
+        const still = !anyStill ? ""
+          : m.still
+            ? `<img class="episode-still" ${posterAttrs(m.still)} alt="" />`
+            : `<div class="episode-still blank"></div>`;
+        const title = m.title ? `<span class="episode-card-title">${escapeHtml(m.title)}</span>` : "";
+        return `
+          <div class="episode-card${i === resumeIdx ? " resume" : ""} focusable" data-action="play-ep" data-index="${i}">
+            ${still}
+            <div class="episode-card-label"><span class="episode-card-no">${escapeHtml(episodeLabel(src, i))}</span>${title}</div>
+          </div>`;
+      }).join("");
+      hydratePosters(list);
+    } else {
+      list.classList.remove("stills");
+      list.style.display = "grid";
+      list.innerHTML = eps.map((_, i) => `
       <div class="episode-item${i === resumeIdx ? " resume" : ""} focusable" data-action="play-ep" data-index="${i}">${escapeHtml(episodeLabel(src, i))}</div>
     `).join("");
+    }
     ScreenUtils.indexFocusables(list, ".focusable");
+    if (focusedIndex >= 0) {
+      const again = list.querySelector(`[data-index="${focusedIndex}"]`);
+      if (again) ScreenUtils.setFocus(again, this.container);
+    }
+    this._ensureEpisodeMeta();
   },
 
   async _maybeFetchDetail() {

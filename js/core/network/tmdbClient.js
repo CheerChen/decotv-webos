@@ -392,6 +392,12 @@ export class TmdbClient {
     return this._get(`/${kind}/${id}`, { append_to_response: "credits" });
   }
 
+  // One season's episodes (stills, names) for the episode cards.
+  async getSeason(id, seasonNumber) {
+    if (!/^\d+$/.test(String(id || "")) || !(Number(seasonNumber) >= 0)) throw tmdbError(400, "TMDB_BAD_SEASON");
+    return this._get(`/tv/${id}/season/${Number(seasonNumber)}`);
+  }
+
   // Charts. Movie: hot / latest / top_rated / hidden_gems. TV: hot only,
   // with opts.region "" (全部) or "欧美".
   async getChart(mediaTypeArg, chart = "hot", page = 1, opts = {}) {

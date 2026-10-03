@@ -35,6 +35,13 @@ async function request(url, { method = "GET", body, timeoutMs = DEFAULT_TIMEOUT_
   }
 }
 
+// GET /v0/episodes — main-story episodes only (type 0), in list order.
+export async function getBangumiEpisodes(subjectId) {
+  if (!/^\d+$/.test(String(subjectId || ""))) throw bangumiError(400, "BANGUMI_BAD_ID");
+  const data = await request(`${API}/v0/episodes?subject_id=${subjectId}&type=0&limit=100`);
+  return Array.isArray(data?.data) ? data.data.filter((e) => e && e.type === 0) : [];
+}
+
 // GET /v0/subjects/{id}. Null when the subject does not exist.
 export async function getBangumiSubject(id) {
   if (!/^\d+$/.test(String(id || ""))) throw bangumiError(400, "BANGUMI_BAD_ID");
