@@ -48,7 +48,7 @@ function area(w, h) {
 }
 
 // Strict coded-resolution rule. Empirically verified across 7 real sources
-// (zuidazym3u8 / modujx / ryplay / bfikuncdn / kkzycdn families): content
+// (five distinct CDN families): content
 // segments of one episode share the exact same SPS coded dimensions, and every
 // observed deviation — smaller (848x640 inside 1920x804), near-same-size
 // (1920x1080 16:9 gambling overlay inside 2542x1080 2.35:1 content) or larger

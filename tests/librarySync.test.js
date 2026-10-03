@@ -26,7 +26,7 @@ const {
 const { LocalLibrary } = await import("../js/core/storage/localLibrary.js");
 
 const rec = (over = {}) => ({
-  title: "流浪地球2", year: "2023", source_name: "猫眼资源",
+  title: "某片2", year: "2023", source_name: "源一",
   index: 1, play_time: 100, total_time: 7200, save_time: 1000, ...over,
 });
 
@@ -34,13 +34,13 @@ describe("local outro marks", () => {
   beforeEach(() => store.clear());
 
   test("use the per-title key and stay separate from play-record replacement", () => {
-    const key = LocalLibrary.recordKeyForTitle("流浪地球2", "2023");
+    const key = LocalLibrary.recordKeyForTitle("某片2", "2023");
     LocalLibrary.saveOutroMark(key, { fromEnd: 42, markedAt: 123 });
-    LocalLibrary.replaceRecords({ "流浪地球2|2023": rec() });
+    LocalLibrary.replaceRecords({ "某片2|2023": rec() });
 
     assert.deepEqual(LocalLibrary.getOutroMark(key), { fromEnd: 42, markedAt: 123 });
     assert.deepEqual(LocalLibrary.getOutroMarks(), {
-      "流浪地球2|2023": { fromEnd: 42, markedAt: 123 }
+      "某片2|2023": { fromEnd: 42, markedAt: 123 }
     });
   });
 
@@ -57,11 +57,11 @@ describe("local outro marks", () => {
 describe("foldServerRecords", () => {
   test("per-source server keys collapse onto one per-title entry", () => {
     const folded = foldServerRecords({
-      "maoyan+137": rec({ save_time: 100 }),
+      "srcb+137": rec({ save_time: 100 }),
       "modu+900": rec({ save_time: 500, play_time: 4000 }),
     });
-    assert.deepEqual(Object.keys(folded), ["流浪地球2|2023"]);
-    assert.equal(folded["流浪地球2|2023"].play_time, 4000);
+    assert.deepEqual(Object.keys(folded), ["某片2|2023"]);
+    assert.equal(folded["某片2|2023"].play_time, 4000);
   });
 
   test("the newest save_time wins regardless of iteration order", () => {
@@ -69,12 +69,12 @@ describe("foldServerRecords", () => {
       "a+1": rec({ save_time: 900, play_time: 9 }),
       "b+2": rec({ save_time: 100, play_time: 1 }),
     });
-    assert.equal(newest["流浪地球2|2023"].play_time, 9);
+    assert.equal(newest["某片2|2023"].play_time, 9);
   });
 
   test("the winning entry carries back the source it came from", () => {
     const folded = foldServerRecords({ "modu+900": rec() });
-    const one = folded["流浪地球2|2023"];
+    const one = folded["某片2|2023"];
     assert.equal(one.source, "modu");
     assert.equal(one.id, "900");
     assert.equal(serverRecordKey(one), "modu+900");
@@ -83,7 +83,7 @@ describe("foldServerRecords", () => {
   test("different titles stay separate, same title different year too", () => {
     const folded = foldServerRecords({
       "a+1": rec(),
-      "b+2": rec({ title: "满江红" }),
+      "b+2": rec({ title: "另一片" }),
       "c+3": rec({ year: "2019" }),
     });
     assert.equal(Object.keys(folded).length, 3);
@@ -101,7 +101,7 @@ describe("foldServerRecords", () => {
 
 describe("applyServerRecords", () => {
   test("the server replaces local state, so remote deletions propagate", () => {
-    const local = { "满江红|2023": rec({ title: "满江红", source: "a", id: "1" }) };
+    const local = { "另一片|2023": rec({ title: "另一片", source: "a", id: "1" }) };
     const next = applyServerRecords(local, {});
     assert.deepEqual(next, {}, "a record the server no longer has must go");
   });
@@ -123,20 +123,20 @@ describe("applyServerRecords", () => {
 
 describe("seeding a server for the first time", () => {
   test("local records the server lacks are uploaded", () => {
-    const local = { "流浪地球2|2023": rec({ source: "a", id: "1" }) };
+    const local = { "某片2|2023": rec({ source: "a", id: "1" }) };
     assert.equal(pickSeedRecords(local, {}).length, 1);
   });
 
   test("a newer local record overwrites an older remote one", () => {
-    const local = { "流浪地球2|2023": rec({ source: "a", id: "1", save_time: 500 }) };
-    assert.equal(pickSeedRecords(local, { "流浪地球2|2023": rec({ save_time: 100 }) }).length, 1);
-    assert.equal(pickSeedRecords(local, { "流浪地球2|2023": rec({ save_time: 900 }) }).length, 0);
+    const local = { "某片2|2023": rec({ source: "a", id: "1", save_time: 500 }) };
+    assert.equal(pickSeedRecords(local, { "某片2|2023": rec({ save_time: 100 }) }).length, 1);
+    assert.equal(pickSeedRecords(local, { "某片2|2023": rec({ save_time: 900 }) }).length, 0);
   });
 
   test("unpushable records are left out instead of failing the upload", () => {
     const legacy = rec();
     delete legacy.source;
-    assert.equal(pickSeedRecords({ "流浪地球2|2023": legacy }, {}).length, 0);
+    assert.equal(pickSeedRecords({ "某片2|2023": legacy }, {}).length, 0);
   });
 
   test("favorites already on the server are not re-uploaded", () => {

@@ -53,7 +53,7 @@ function group(name, count, { dur = 6, dir = "3190kb" } = {}) {
   };
 }
 
-// Same directory, same resolution: the dytt mixed.m3u8 family. Only the
+// Same directory, same resolution: the same-directory family. Only the
 // coded signature (level_idc) separates the ad block from the episode.
 function sameDirPlaylist({ adLevel = 50, contentLevel = 40, adCount = 5, adDur = 6 } = {}) {
   const text = buildPlaylist([

@@ -228,7 +228,7 @@ export const TYPE_CONFIGS = {
       },
     ],
     // TMDB genre 10764 = Reality. Discover with that genre, sorted by
-    // popularity. dedupe collapses franchise repeats (Paradise Hotel x3).
+    // popularity. dedupe collapses franchise repeats (one reality franchise listed x3).
     tmdb: {
       endpoint: "discover",
       mediaType: "tv",
@@ -350,7 +350,7 @@ export const TYPE_CONFIGS = {
     ],
     // TMDB genre 99 = Documentary. Chart for the "hot" mode, discover for
     // "curated" — same mode toggle, different backend. dedupe collapses
-    // franchise repeats (蠢蛋搞怪秀 x4).
+    // franchise repeats (one series listed x4).
     tmdb: {
       endpoint: "discover",
       mediaType: "movie",

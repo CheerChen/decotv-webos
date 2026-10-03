@@ -269,7 +269,7 @@ export async function scanAdRanges(playUrl, opts = {}) {
 
   // Majority coded-parameter signature (resolution + level_idc) weighted by
   // group duration. level_idc catches ads re-encoded to the SAME resolution
-  // as the content and hosted in the same directory (dytt mixed.m3u8 family:
+  // as the content and hosted in the same directory (the same-directory family:
   // ad 1920x1080@level50 vs content 1920x1080@level40) — the encoder that
   // restreams the ad almost never lands on the identical level.
   const areaKey = (w, h, level) => `${w}x${h}@${level}`;

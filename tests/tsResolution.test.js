@@ -34,15 +34,15 @@ describe("resolutionFromTsBuffer", () => {
     assert.ok(Number.isInteger(dims.level) && dims.level > 0);
   });
 
-  // dytt mixed.m3u8 case: ad re-encoded to the same 1920x1080 as content —
+  // same-directory family case: ad re-encoded to the same 1920x1080 as content —
   // only level_idc separates them (ad @50, content @40).
-  const dyttAd = "/tmp/dytt_ad.ts";
-  const dyttContent = "/tmp/dytt_content.ts";
+  const samedirAd = "/tmp/samedir_ad.ts";
+  const samedirContent = "/tmp/samedir_content.ts";
 
-  it("distinguishes same-resolution dytt ad via level_idc when present", () => {
-    if (!existsSync(dyttAd) || !existsSync(dyttContent)) return;
-    const adDims = resolutionFromTsBuffer(readFileSync(dyttAd));
-    const ctDims = resolutionFromTsBuffer(readFileSync(dyttContent));
+  it("distinguishes same-resolution same-directory ad via level_idc when present", () => {
+    if (!existsSync(samedirAd) || !existsSync(samedirContent)) return;
+    const adDims = resolutionFromTsBuffer(readFileSync(samedirAd));
+    const ctDims = resolutionFromTsBuffer(readFileSync(samedirContent));
     assert.ok(adDims && ctDims);
     assert.equal(adDims.w, ctDims.w);
     assert.equal(adDims.h, ctDims.h);

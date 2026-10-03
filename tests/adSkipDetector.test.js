@@ -23,7 +23,7 @@ import {
 
 // Real H.264 SPS snippets (start code + NAL), verified to parse via
 // resolutionFromTsBuffer: 1920x1080 ad material, 1280x720 content, and
-// 2542x1080 letterboxed 2.35:1 content (zuidazym3u8 family).
+// 2542x1080 letterboxed 2.35:1 content (CDN family A).
 const SPS_1080P = new Uint8Array([
   0x00, 0x00, 0x00, 0x01,
   0x67, 0x64, 0x00, 0x28, 0xac, 0xd9, 0x40, 0x78, 0x02, 0x27, 0xe5,

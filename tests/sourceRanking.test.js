@@ -138,7 +138,7 @@ describe("comparePlaybackMetrics", () => {
 
 describe("getSourceProbeKey", () => {
   test("builds source-id key", () => {
-    assert.equal(getSourceProbeKey({ source: "jszyapi.com", id: 61361 }), "jszyapi.com-61361");
+    assert.equal(getSourceProbeKey({ source: "site-a.example", id: 61361 }), "site-a.example-61361");
   });
 });
 

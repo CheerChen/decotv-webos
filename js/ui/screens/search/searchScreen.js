@@ -406,7 +406,7 @@ export const SearchScreen = {
         page,
         // 剧集 tab excludes animation (genre 16) — see browseConfig.
         exclude_genres: tcfg.excludeGenres || "",
-        // 综艺/纪录片 collapse franchise repeats (Paradise Hotel x3).
+        // 综艺/纪录片 collapse franchise repeats (one reality franchise listed x3).
         dedupe: tcfg.dedupe ? "1" : "",
       });
       return this._normalizeTmdbList(data);

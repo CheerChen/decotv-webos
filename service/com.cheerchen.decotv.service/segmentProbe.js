@@ -7,7 +7,7 @@
 //
 // Why this exists: the URL-signature rule in m3u8AdFilter.js is free but
 // blind to ad blocks that live in the SAME directory at the SAME resolution
-// as the episode (the dytt mixed.m3u8 family: ad 1920x1080@level50 vs
+// as the episode (the same-directory family: ad 1920x1080@level50 vs
 // content 1920x1080@level40). Those were only ever catchable by the client's
 // background pre-scan, which could do nothing but seek — paying a decoder
 // flush, a 0.35s window where ad frames still paint, and a timeline that

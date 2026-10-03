@@ -19,7 +19,7 @@ const { resolutionFromTsBuffer: serviceParse } = require(
 );
 
 // Dimensions seen across the real source families: content, injected ads at a
-// different resolution, cropped "2.35:1" rips, and the dytt same-resolution
+// different resolution, cropped "2.35:1" rips, and the same-directory same-resolution
 // family that is only separable by level_idc.
 const CASES = [
   { w: 1920, h: 1080, level: 40 },
