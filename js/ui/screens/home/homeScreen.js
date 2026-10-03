@@ -283,6 +283,7 @@ export const HomeScreen = {
           title,
           poster,
           work: item?.title === title ? item.work || null : null,
+          backdrop: item?.title === title ? item.backdrop || "" : "",
           autoPlay: true
         });
         return;

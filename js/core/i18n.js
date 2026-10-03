@@ -71,6 +71,9 @@ const DICT = {
     "settings.tmdbAttribution": "本产品使用 TMDB API，但未获得 TMDB 的认可或认证。",
     "settings.catalogProvider": "资源来源",
     "settings.providerDouban": "豆瓣",
+    "settings.detailHero": "详情页大图",
+    "settings.heroPoster": "竖版海报",
+    "settings.heroBackdrop": "横版剧照",
     "settings.providerTmdb": "TMDB",
 
     "auth.badCredentials": "凭据无效",
@@ -134,6 +137,9 @@ const DICT = {
     "settings.tmdbAttribution": "This product uses the TMDB API but is not endorsed or certified by TMDB.",
     "settings.catalogProvider": "Catalog provider",
     "settings.providerDouban": "Douban",
+    "settings.detailHero": "Details hero",
+    "settings.heroPoster": "Portrait poster",
+    "settings.heroBackdrop": "Landscape still",
     "settings.providerTmdb": "TMDB",
 
     "auth.badCredentials": "Invalid credentials",

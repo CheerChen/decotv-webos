@@ -533,7 +533,7 @@ export const SearchScreen = {
         const idx = Number(focused.dataset.index);
         const r = this.results[idx];
         if (!r) return;
-        Router.navigate("detail", { title: r.title, poster: r.poster, year: r.year, work: r.work || null, autoPlay: true });
+        Router.navigate("detail", { title: r.title, poster: r.poster, year: r.year, work: r.work || null, backdrop: r.backdrop || "", autoPlay: true });
         return;
       }
       // Nav tabs — handleNavAction covers all nav-* dispatching.

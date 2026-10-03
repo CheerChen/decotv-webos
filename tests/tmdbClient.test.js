@@ -118,7 +118,7 @@ describe("TmdbClient requests", () => {
     assert.equal(q.get("api_key"), null);
     assert.equal(data.total, 60);
     assert.deepEqual(data.list[0], {
-      id: "7", title: "片名", poster: "https://image.tmdb.org/t/p/w500/loc.jpg",
+      id: "7", title: "片名", poster: "https://image.tmdb.org/t/p/w500/loc.jpg", backdrop: "",
       rate: "8.3", votes: 1234, year: "2020",
       work: { provider: "tmdb", kind: "movie", id: "7" },
       _tmdb_id: 7, _media_type: "movie", _date: "2020-05-01"

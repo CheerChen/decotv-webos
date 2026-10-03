@@ -8,8 +8,11 @@ import {
   normalizeBangumiSubject,
   chineseSummary,
   getWorkDetails,
+  getWorkBackdrop,
+  pickHeroStill,
   _resetWorkDetailsCache,
 } from "../js/core/catalog/workDetails.js";
+import { getHeroStyle, setHeroStyle } from "../js/core/storage/heroStyle.js";
 import { getSubject, _resetForTest as resetDouban } from "../js/core/network/doubanDirect.js";
 
 function installStorage() {
@@ -183,5 +186,39 @@ describe("douban getSubject", () => {
       globalThis.window = previous;
       resetDouban();
     }
+  });
+});
+
+describe("landscape hero", () => {
+  const photo = (url, w, h) => ({ image: { large: { url, width: w, height: h } } });
+
+  test("the frame closest to 16:9 wins among wide-enough landscape photos", () => {
+    assert.equal(pickHeroStill([photo("promo-3x2", 1500, 1000), photo("still-16x9", 1920, 1080)]), "still-16x9");
+    assert.equal(pickHeroStill([photo("cover", 1066, 1600), photo("promo-3x2", 1500, 1000)]), "promo-3x2");
+    assert.equal(pickHeroStill([
+      photo("portrait", 1066, 1600), photo("square", 1400, 1400), photo("narrow", 1000, 562), photo("banner", 3000, 1000),
+    ]), "");
+    assert.equal(pickHeroStill(null), "");
+  });
+
+  test("backdrop per provider; douban photo walls are fetched once", async () => {
+    _resetWorkDetailsCache();
+    let calls = 0;
+    const photos = async () => { calls++; return [photo("still", 1920, 1080)]; };
+    assert.equal(await getWorkBackdrop(makeWork("tmdb", "tv", 1), { backdrop: "tmdb-bd" }, { photos }), "tmdb-bd");
+    assert.equal(await getWorkBackdrop(makeWork("bangumi", "", 1), {}, { photos }), "");
+    assert.equal(await getWorkBackdrop(makeWork("douban", "tv", 2), {}, { photos }), "still");
+    assert.equal(await getWorkBackdrop(makeWork("douban", "tv", 2), {}, { photos }), "still");
+    assert.equal(calls, 1);
+    assert.equal(await getWorkBackdrop(makeWork("douban", "tv", 3), {}, { photos: async () => { throw new Error("x"); } }), "");
+  });
+
+  test("hero style defaults to the portrait poster", () => {
+    installStorage();
+    assert.equal(getHeroStyle(), "poster");
+    setHeroStyle("backdrop");
+    assert.equal(getHeroStyle(), "backdrop");
+    setHeroStyle("anything");
+    assert.equal(getHeroStyle(), "poster");
   });
 });

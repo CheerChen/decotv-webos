@@ -5,6 +5,7 @@ import { Router } from "../../navigation/router.js";
 import { AuthManager } from "../../../core/auth/authManager.js";
 import { api } from "../../../core/network/decotvClient.js";
 import { getProvider, setProvider } from "../../../core/storage/catalogProvider.js";
+import { getHeroStyle, setHeroStyle } from "../../../core/storage/heroStyle.js";
 import { LocalLibrary } from "../../../core/storage/localLibrary.js";
 import { LibrarySync } from "../../../core/storage/librarySync.js";
 import { showToast } from "../../toast.js";
@@ -55,6 +56,7 @@ export const SettingsScreen = {
     const clientVersion = await readClientVersion();
     const provider = getProvider();
     const providerLabel = provider === "tmdb" ? t("settings.providerTmdb") : t("settings.providerDouban");
+    const heroLabel = getHeroStyle() === "backdrop" ? t("settings.heroBackdrop") : t("settings.heroPoster");
 
     // Left: focusable actions. Right: read-only client + server facts.
     this.container.innerHTML = `
@@ -75,6 +77,10 @@ export const SettingsScreen = {
               <div class="settings-item focusable" data-action="toggle-provider">
                 <div class="settings-label">${t("settings.catalogProvider")}</div>
                 <div class="settings-value">${escapeHtml(providerLabel)}</div>
+              </div>
+              <div class="settings-item focusable" data-action="toggle-hero">
+                <div class="settings-label">${t("settings.detailHero")}</div>
+                <div class="settings-value">${escapeHtml(heroLabel)}</div>
               </div>
               <div class="settings-item focusable" data-action="clear-records">
                 <div class="settings-label">${t("settings.clearRecords")}</div>
@@ -144,6 +150,11 @@ export const SettingsScreen = {
         // Re-mount so the TMDB attribution appears/disappears and the
         // label updates.
         Router.navigate("settings", { focusAction: "toggle-provider" });
+        return;
+      }
+      if (action === "toggle-hero") {
+        setHeroStyle(getHeroStyle() === "backdrop" ? "poster" : "backdrop");
+        Router.navigate("settings", { focusAction: "toggle-hero" });
         return;
       }
       if (action === "logout") {

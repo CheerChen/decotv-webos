@@ -41,7 +41,8 @@ import {
   setCachedDetail
 } from "../../../core/storage/detailCache.js";
 import { normalizeWork, rememberWork, lookupWork } from "../../../core/catalog/work.js";
-import { getWorkDetails } from "../../../core/catalog/workDetails.js";
+import { getWorkDetails, getWorkBackdrop } from "../../../core/catalog/workDetails.js";
+import { getHeroStyle } from "../../../core/storage/heroStyle.js";
 import { loadEpisodeMeta } from "../../../core/catalog/episodeMeta.js";
 
 // Monochrome play glyph for the primary action (inherits color via currentColor).
@@ -114,12 +115,16 @@ export const DetailScreen = {
     // The work this page is about, in the catalog that listed it: from the
     // card, else from the local map (continue watching, favorites, Back).
     this.work = normalizeWork(params.work) || lookupWork(this.title, this.year);
+    this.cardBackdrop = String(params.backdrop || "");
     this.workDetails = null;
     this.episodeMeta = null;      // Map index -> { still, title } for currentSource
     this._episodeMetaFor = "";    // probe key of the source the meta belongs to
     if (this.work && params.work) rememberWork(this.title, this.year, this.work);
 
     this._renderSkeleton();
+    // Landscape hero: lay the page out for it from the first frame instead
+    // of showing the poster and switching once the still is known.
+    if (this._wantsBackdrop()) this._startBackdrop(epoch);
     this._renderHeroMeta(); // year from entry params; enriched as sources/detail arrive
     ScreenUtils.show(this.container);
     this._loadWorkDetails(epoch);
@@ -168,6 +173,51 @@ export const DetailScreen = {
     if (!this.poster && details.poster) this._setPoster(details.poster);
     this._renderHeroMeta();
     this._ensureEpisodeMeta();
+  },
+
+  // Landscape hero (settings → 详情页大图 → 横版剧照): the work's still
+  // fills the whole screen behind the page — a 16:9 TV shows the frame
+  // uncropped — the info sits on its shaded left, the poster steps aside.
+  // Scrolling down to the episodes / sources deepens the shade.
+  //
+  // Only providers that can have a landscape still take this layout up
+  // front (TMDB, douban); Bangumi has none and keeps the poster. The still
+  // comes from the card when it has one (TMDB lists carry it), else from
+  // the provider (douban photo wall, requested now, in parallel with the
+  // details; TMDB details). It fades in when loaded. A work that turns out
+  // to have none falls back to the poster.
+  _wantsBackdrop() {
+    return getHeroStyle() === "backdrop"
+      && Boolean(this.work)
+      && (this.work.provider === "tmdb" || this.work.provider === "douban");
+  },
+
+  async _startBackdrop(epoch) {
+    const wrap = this.container?.querySelector("#detailBackdrop");
+    const hero = this.container?.querySelector("#detailHero");
+    const scroll = this.container?.querySelector("#detailScroll");
+    if (!wrap || !hero) return;
+    wrap.innerHTML = `<div class="detail-backdrop-shade"></div>`;
+    wrap.classList.add("on");
+    hero.classList.add("has-backdrop");
+    scroll?.addEventListener("scroll", () => {
+      wrap.classList.toggle("scrolled", scroll.scrollTop > 120);
+    }, { passive: true });
+
+    let url = this.cardBackdrop;
+    if (!url) {
+      const details = this.work.provider === "tmdb" ? await getWorkDetails(this.work) : null;
+      url = await getWorkBackdrop(this.work, details);
+    }
+    if (epoch !== this._mountEpoch) return;
+    if (!url) {
+      wrap.classList.remove("on");
+      wrap.innerHTML = "";
+      hero.classList.remove("has-backdrop");
+      return;
+    }
+    wrap.insertAdjacentHTML("afterbegin", `<img class="detail-backdrop-img" ${posterAttrs(url)} alt="" />`);
+    hydratePosters(wrap);
   },
 
   // Episode stills / official titles for the playing source, from the work's
@@ -236,8 +286,9 @@ export const DetailScreen = {
     // source list it operates on.
     this.container.innerHTML = `
       ${renderNavHeader()}
+      <div class="detail-backdrop" id="detailBackdrop"></div>
       <div class="content-scroll" id="detailScroll">
-        <div class="detail-hero">
+        <div class="detail-hero" id="detailHero">
           <img class="detail-poster" id="detailPoster" ${poster} alt="" onerror="this.style.opacity=0.15" />
           <div class="detail-info">
             <h1 class="detail-title">${title}</h1>

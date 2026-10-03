@@ -78,6 +78,7 @@ export const TMDB_TV_777 = {
     id: 777, name: "测试剧集", first_air_date: "2024-01-01", overview: "E2E TMDB 概要",
     vote_average: 8.0, vote_count: 321, genres: [{ name: "剧情" }],
     credits: { crew: [], cast: [] },
+    backdrop_path: "/bd.jpg",
     seasons: [{ season_number: 1, name: "第 1 季", air_date: "2024-01-01", episode_count: 3 }],
   },
   season1: {

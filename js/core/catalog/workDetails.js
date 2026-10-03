@@ -11,7 +11,7 @@
 // with credits, Bangumi v0 subject. Results are memoised for the session.
 
 import { normalizeWork, workKey } from "./work.js";
-import { getSubject as getDoubanSubject } from "../network/doubanDirect.js";
+import { getSubject as getDoubanSubject, getSubjectPhotos as getDoubanPhotos } from "../network/doubanDirect.js";
 import { tmdb } from "../network/tmdbClient.js";
 import { getBangumiSubject } from "../network/bangumiClient.js";
 
@@ -155,6 +155,7 @@ export function normalizeBangumiSubject(s) {
 }
 
 const cache = new Map(); // workKey -> { at, value }
+const inflight = new Map(); // workKey -> Promise (one request per work at a time)
 
 async function fetchDetails(work) {
   if (work.provider === "douban") return normalizeDoubanSubject(await getDoubanSubject(work.kind, work.id));
@@ -170,13 +171,14 @@ export async function getWorkDetails(value, { fetcher = fetchDetails, now = Date
   const key = workKey(work);
   const hit = cache.get(key);
   if (hit && now() - hit.at < CACHE_TTL_MS) return hit.value;
-  let result = null;
-  try {
-    result = await fetcher(work);
-  } catch (e) {
+  if (inflight.has(key)) return inflight.get(key);
+  const pending = Promise.resolve().then(() => fetcher(work)).catch((e) => {
     console.warn("workDetails:", key, e?.message || e);
     return null;
-  }
+  });
+  inflight.set(key, pending);
+  const result = await pending;
+  inflight.delete(key);
   if (result) {
     cache.delete(key);
     cache.set(key, { at: now(), value: result });
@@ -185,6 +187,55 @@ export async function getWorkDetails(value, { fetcher = fetchDetails, now = Date
   return result;
 }
 
+// Douban photos carry no labels: covers, character posters and 3:2 promo
+// art with text are mixed in with the stills. The hero takes the frame
+// closest to 16:9 among wide-enough landscape photos; none → no backdrop.
+const HERO_MIN_WIDTH = 1280;
+const HERO_MIN_RATIO = 1.3;
+const HERO_MAX_RATIO = 2.6;
+
+export function pickHeroStill(photos) {
+  let best = null;
+  let bestScore = Infinity;
+  for (const photo of Array.isArray(photos) ? photos : []) {
+    const image = photo?.image?.large || photo?.image?.raw || null;
+    const w = Number(image?.width);
+    const h = Number(image?.height);
+    if (!image?.url || !(w >= HERO_MIN_WIDTH) || !(h > 0)) continue;
+    const ratio = w / h;
+    if (ratio < HERO_MIN_RATIO || ratio > HERO_MAX_RATIO) continue;
+    const score = Math.abs(Math.log(ratio / (16 / 9)));
+    if (score < bestScore) {
+      best = image.url;
+      bestScore = score;
+    }
+  }
+  return best || "";
+}
+
+const backdropCache = new Map(); // workKey -> url ("" = none)
+
+// Landscape hero image of a work, from its own provider. Never throws.
+export async function getWorkBackdrop(value, details, { photos = getDoubanPhotos } = {}) {
+  const work = normalizeWork(value);
+  if (!work) return "";
+  if (work.provider === "tmdb") return details?.backdrop || "";
+  if (work.provider !== "douban") return "";
+  const key = workKey(work);
+  if (backdropCache.has(key)) return backdropCache.get(key);
+  let url = "";
+  try {
+    url = pickHeroStill(await photos(work.kind, work.id));
+  } catch (e) {
+    console.warn("workBackdrop:", key, e?.message || e);
+    return "";
+  }
+  backdropCache.set(key, url);
+  while (backdropCache.size > CACHE_MAX) backdropCache.delete(backdropCache.keys().next().value);
+  return url;
+}
+
 export function _resetWorkDetailsCache() {
   cache.clear();
+  backdropCache.clear();
 }

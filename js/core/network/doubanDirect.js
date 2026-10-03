@@ -383,6 +383,34 @@ export async function getSubject(kind, id) {
   return response.json();
 }
 
+// Photo wall for the landscape hero: /rexxar/api/v2/{kind}/{id}/photos.
+// Same missing/restricted semantics as getSubject. Only requested when the
+// user picked the landscape hero, so the default page costs nothing extra.
+export async function getSubjectPhotos(kind, id, count = 30) {
+  if (kind !== "movie" && kind !== "tv") throw new Error("DOUBAN_BAD_KIND");
+  if (!/^\d+$/.test(String(id || ""))) throw new Error("DOUBAN_BAD_ID");
+  if (!directAvailable()) throw new Error("DOUBAN_UNAVAILABLE");
+  let response;
+  try {
+    response = await lunaDoubanFetch(`/rexxar/api/v2/${kind}/${id}/photos?count=${count}`, { timeoutMs: 12000 });
+  } catch (e) {
+    noteFailure();
+    throw e;
+  }
+  if (response.status === 404) return [];
+  if (response.status === 403) {
+    const body = await response.text().catch(() => "");
+    if (/need_permission/.test(body)) return [];
+  }
+  if (!response.ok) {
+    noteFailure();
+    throw new Error(`DOUBAN_HTTP_${response.status}`);
+  }
+  noteSuccess();
+  const data = await response.json();
+  return Array.isArray(data?.photos) ? data.photos : [];
+}
+
 // Test hook: reset all module state.
 export function _resetForTest() {
   state.paginators.clear();

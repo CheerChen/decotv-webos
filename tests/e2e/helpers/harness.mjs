@@ -60,6 +60,8 @@ export async function bootToHome(page) {
           }
           if (options.method === "fetchDouban") {
             const path = String(p.path || "");
+            // Specs read this to check which rexxar calls were made.
+            (window.__doubanPaths = window.__doubanPaths || []).push(path);
             let body;
             if (path.includes("/subject_collection/movie_hot_gaia")) {
               body = { total: movieItems.length, subject_collection_items: movieItems };
@@ -67,6 +69,8 @@ export async function bootToHome(page) {
               body = { total: 0, subject_collection_items: [] };
             } else if (path.includes("/subject/recent_hot/") || path.includes("/recommend")) {
               body = { total: 0, items: [] };
+            } else if (/^\/rexxar\/api\/v2\/(movie|tv)\/\d+\/photos/.test(path)) {
+              body = { total: 0, photos: [] };
             } else if (/^\/rexxar\/api\/v2\/(movie|tv)\/\d+$/.test(path)) {
               // Subject details: one fixture subject, everything else missing.
               const known = path.endsWith(`/${doubanSubject.id}`);

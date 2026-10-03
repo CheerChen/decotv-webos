@@ -352,6 +352,8 @@ export class TmdbClient {
       id: String(item.id),
       title,
       poster: posterPath ? `${TMDB_IMAGE_BASE}/${POSTER_SIZE}${posterPath}` : "",
+      // Landscape hero without waiting for the details request.
+      backdrop: item.backdrop_path ? `${TMDB_IMAGE_BASE}/w1280${item.backdrop_path}` : "",
       rate: item.vote_average ? Number(item.vote_average).toFixed(1) : "",
       votes: item.vote_count || 0,
       year: date.slice(0, 4),

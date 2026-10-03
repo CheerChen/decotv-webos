@@ -28,6 +28,7 @@ js/core/playback/streamResolution.js
 js/core/playback/tsResolution.js
 js/core/storage/catalogProvider.js
 js/core/storage/detailCache.js
+js/core/storage/heroStyle.js
 js/core/storage/librarySync.js
 js/core/storage/localLibrary.js
 js/core/storage/localStore.js
