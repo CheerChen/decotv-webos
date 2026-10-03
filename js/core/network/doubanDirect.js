@@ -20,6 +20,7 @@
 // a concert film.
 
 import { hasLunaTransport, lunaDoubanFetch } from "./lunaTransport.js";
+import { makeWork } from "../catalog/work.js";
 
 // How many items to pull from rexxar per upstream batch. Larger batches mean
 // fewer requests for the same filtered output; 3 external pages per request
@@ -108,8 +109,10 @@ export function buildRecommendPath(kind, opts, start, count) {
 // `cover.url` and derive year from card_subtitle instead.
 export function mapRexxarItem(item) {
   const subtitle = item.card_subtitle || "";
+  const kind = item.type === "movie" || item.type === "tv" ? item.type : "";
   return {
     id: String(item.id),
+    work: makeWork("douban", kind, item.id),
     title: item.title,
     poster: item.pic?.normal || item.pic?.large || item.cover?.url || "",
     rate: item.rating?.value ? Number(item.rating.value).toFixed(1) : "",
@@ -350,6 +353,34 @@ export async function getChartPage(type, tag, start = 0, count = 24) {
     noteFailure();
     throw e;
   }
+}
+
+// Subject details for the details page: /rexxar/api/v2/{movie|tv}/{id}.
+// A missing subject (404) or one restricted to signed-in users (403
+// need_permission) is an answer, not an outage: it returns null without
+// counting toward the breaker. Anything else counts and throws.
+export async function getSubject(kind, id) {
+  if (kind !== "movie" && kind !== "tv") throw new Error("DOUBAN_BAD_KIND");
+  if (!/^\d+$/.test(String(id || ""))) throw new Error("DOUBAN_BAD_ID");
+  if (!directAvailable()) throw new Error("DOUBAN_UNAVAILABLE");
+  let response;
+  try {
+    response = await lunaDoubanFetch(`/rexxar/api/v2/${kind}/${id}`, { timeoutMs: 12000 });
+  } catch (e) {
+    noteFailure();
+    throw e;
+  }
+  if (response.status === 404) return null;
+  if (response.status === 403) {
+    const body = await response.text().catch(() => "");
+    if (/need_permission/.test(body)) return null;
+  }
+  if (!response.ok) {
+    noteFailure();
+    throw new Error(`DOUBAN_HTTP_${response.status}`);
+  }
+  noteSuccess();
+  return response.json();
 }
 
 // Test hook: reset all module state.

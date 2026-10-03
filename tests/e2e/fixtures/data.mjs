@@ -55,8 +55,26 @@ export const PROBES = {
 
 export const RESOLVE_FAILS = new Set(["f1"]);
 
+// rexxar subject for the first home card: what the details page shows from
+// the work's own provider.
+export const DOUBAN_SUBJECT_1001 = {
+  id: "1001",
+  title: "测试剧集",
+  year: "2024",
+  intro: "E2E 豆瓣简介",
+  rating: { value: 8.5, count: 12345 },
+  genres: ["剧情", "悬疑"],
+  durations: [],
+  episodes_count: 3,
+  directors: [{ name: "测试导演" }],
+  actors: [{ name: "演员甲" }, { name: "演员乙" }],
+  pic: { large: "https://poster.example/a.jpg" },
+};
+
 // Home 热门电影 chart (row 0). Home cards pass title (no year) to detail.
+// Ids are numeric like real douban subject ids: a card only carries a work
+// id (and the details page only asks douban) when the id is numeric.
 export const HOME_MOVIE_CARDS = [
-  { id: "d1", title: "测试剧集", poster: "https://poster.example/a.jpg", rate: "8.5", year: "2024" },
-  { id: "d2", title: "故障剧", poster: "https://poster.example/b.jpg", rate: "7.0", year: "2023" },
+  { id: "1001", title: "测试剧集", poster: "https://poster.example/a.jpg", rate: "8.5", year: "2024" },
+  { id: "1002", title: "故障剧", poster: "https://poster.example/b.jpg", rate: "7.0", year: "2023" },
 ];

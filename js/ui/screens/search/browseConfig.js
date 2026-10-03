@@ -4,6 +4,8 @@
 // switches provider in settings. The search screen reads the active
 // provider from a shared store and picks the right branch.
 
+import { makeWork } from "../../../core/catalog/work.js";
+
 export const YEAR_OPTIONS = [
   { label: "全部", value: "all" },
   { label: "2026", value: "2026" },
@@ -426,6 +428,7 @@ export function bangumiToCards(calendar, selectedWeekday) {
     rate: item.rating?.score ? String(item.rating.score) : "",
     votes: item.rating?.total || 0,
     year: item.air_date || "",
+    work: makeWork("bangumi", "", item.id),
     _bangumi: true,
   }));
 }

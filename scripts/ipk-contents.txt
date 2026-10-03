@@ -9,7 +9,10 @@ css/layout.css
 index.html
 js/app.js
 js/core/auth/authManager.js
+js/core/catalog/work.js
+js/core/catalog/workDetails.js
 js/core/i18n.js
+js/core/network/bangumiClient.js
 js/core/network/decotvClient.js
 js/core/network/doubanDirect.js
 js/core/network/lunaTransport.js

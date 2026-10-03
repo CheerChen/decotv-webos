@@ -15,6 +15,7 @@
 
 import { LocalStore } from "../storage/localStore.js";
 import { hasLunaTransport, lunaTmdbFetch } from "./lunaTransport.js";
+import { makeWork } from "../catalog/work.js";
 
 const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
 const POSTER_SIZE = "w500";
@@ -354,6 +355,7 @@ export class TmdbClient {
       rate: item.vote_average ? Number(item.vote_average).toFixed(1) : "",
       votes: item.vote_count || 0,
       year: date.slice(0, 4),
+      work: makeWork("tmdb", mt, item.id),
       _tmdb_id: item.id,
       _media_type: mt,
       _date: date,
@@ -381,6 +383,14 @@ export class TmdbClient {
   }
 
   // ── Catalog ──────────────────────────────────────────────────────────────
+
+  // Details page: /movie/{id} or /tv/{id} with credits in one request. A tv
+  // response also carries the season list the episode stills need.
+  async getWorkDetails(kind, id) {
+    if (kind !== "movie" && kind !== "tv") throw tmdbError(400, "TMDB_BAD_KIND");
+    if (!/^\d+$/.test(String(id || ""))) throw tmdbError(400, "TMDB_BAD_ID");
+    return this._get(`/${kind}/${id}`, { append_to_response: "credits" });
+  }
 
   // Charts. Movie: hot / latest / top_rated / hidden_gems. TV: hot only,
   // with opts.region "" (全部) or "欧美".

@@ -273,9 +273,18 @@ export const HomeScreen = {
       if (action === "open-douban") {
         const title = focused.dataset.title;
         const poster = focused.dataset.poster;
+        // The card's catalog item carries the work id the details page asks
+        // its provider with. Home cards deliberately pass no year: source
+        // matching from home has always been year-agnostic.
+        const item = this.rowsData?.[Number(focused.dataset.row)]?.items?.[Number(focused.dataset.col)];
         // Match PC flow: go straight to detail which will search all sources,
         // probe them, pick the best, and start playback.
-        Router.navigate("detail", { title, poster, autoPlay: true });
+        Router.navigate("detail", {
+          title,
+          poster,
+          work: item?.title === title ? item.work || null : null,
+          autoPlay: true
+        });
         return;
       }
       if (action === "open-rec") {

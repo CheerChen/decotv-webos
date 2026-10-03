@@ -1,5 +1,5 @@
 // tests/e2e/helpers/harness.mjs — boot the app in Chromium with a fake backend.
-import { CATALOG, PROBES, RESOLVE_FAILS, HOME_MOVIE_CARDS, SERVER_CONFIG } from "../fixtures/data.mjs";
+import { CATALOG, PROBES, RESOLVE_FAILS, HOME_MOVIE_CARDS, SERVER_CONFIG, DOUBAN_SUBJECT_1001 } from "../fixtures/data.mjs";
 
 const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
@@ -29,7 +29,7 @@ export async function bootToHome(page) {
   //    included. The webOS.service.request stub is required because the
   //    Douban catalog no longer calls /api/douban* — it goes through the
   //    service's fetchDouban (rexxar, m.douban.com).
-  await page.addInitScript(({ config, movieItems, pngB64 }) => {
+  await page.addInitScript(({ config, movieItems, pngB64, doubanSubject }) => {
     localStorage.setItem("decotv.apiBaseUrl", JSON.stringify("http://127.0.0.1:4173"));
     localStorage.setItem("decotv.serverConfig", JSON.stringify(config));
     localStorage.setItem("decotv.local.playRecords.migratedVersion", JSON.stringify("2"));
@@ -67,6 +67,12 @@ export async function bootToHome(page) {
               body = { total: 0, subject_collection_items: [] };
             } else if (path.includes("/subject/recent_hot/") || path.includes("/recommend")) {
               body = { total: 0, items: [] };
+            } else if (/^\/rexxar\/api\/v2\/(movie|tv)\/\d+$/.test(path)) {
+              // Subject details: one fixture subject, everything else missing.
+              const known = path.endsWith(`/${doubanSubject.id}`);
+              ok({ returnValue: true, status: known ? 200 : 404, contentType: "application/json",
+                body: JSON.stringify(known ? doubanSubject : { msg: "not found" }) });
+              return CANCEL;
             } else {
               fail(`unhandled rexxar path: ${path}`);
               return CANCEL;
@@ -99,6 +105,7 @@ export async function bootToHome(page) {
   }, {
     config: SERVER_CONFIG,
     pngB64: PNG_1X1.toString("base64"),
+    doubanSubject: DOUBAN_SUBJECT_1001,
     // rexxar subject_collection item shape: cover.url (no pic), year inside
     // card_subtitle, rating.value + rating.count.
     movieItems: HOME_MOVIE_CARDS.map((c) => ({

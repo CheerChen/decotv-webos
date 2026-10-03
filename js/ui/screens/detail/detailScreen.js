@@ -18,7 +18,7 @@ import { LocalLibrary } from "../../../core/storage/localLibrary.js";
 import { LibrarySync } from "../../../core/storage/librarySync.js";
 import { showToast } from "../../toast.js";
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
-import { escapeHtml } from "../../utils.js";
+import { escapeHtml, formatVotes } from "../../utils.js";
 import { posterAttrs, hydratePosters } from "../../posterImage.js";
 import { renderProbeCell } from "../../probeLabel.js";
 import { readStreamResolution } from "../../../core/playback/streamResolution.js";
@@ -40,6 +40,8 @@ import {
   getCachedDetail,
   setCachedDetail
 } from "../../../core/storage/detailCache.js";
+import { normalizeWork, rememberWork, lookupWork } from "../../../core/catalog/work.js";
+import { getWorkDetails } from "../../../core/catalog/workDetails.js";
 
 // Monochrome play glyph for the primary action (inherits color via currentColor).
 const PLAY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
@@ -108,9 +110,16 @@ export const DetailScreen = {
       this.sources = [];
     }
 
+    // The work this page is about, in the catalog that listed it: from the
+    // card, else from the local map (continue watching, favorites, Back).
+    this.work = normalizeWork(params.work) || lookupWork(this.title, this.year);
+    this.workDetails = null;
+    if (this.work && params.work) rememberWork(this.title, this.year, this.work);
+
     this._renderSkeleton();
     this._renderHeroMeta(); // year from entry params; enriched as sources/detail arrive
     ScreenUtils.show(this.container);
+    this._loadWorkDetails(epoch);
 
     if (this.mode === "single") {
       // Already have a source; optionally fetch detail for richer metadata.
@@ -144,6 +153,17 @@ export const DetailScreen = {
     ScreenUtils.setInitialFocus(this.container.querySelector('.btn[data-action="play"]'));
     await this._searchAndPrefer();
     this._saveCache();
+  },
+
+  // Provider metadata, fetched alongside the source search. Fire and forget:
+  // a slow or failing provider never holds back sources or playback.
+  async _loadWorkDetails(epoch) {
+    if (!this.work) return;
+    const details = await getWorkDetails(this.work);
+    if (epoch !== this._mountEpoch || !details) return;
+    this.workDetails = details;
+    if (!this.poster && details.poster) this._setPoster(details.poster);
+    this._renderHeroMeta();
   },
 
   _saveCache() {
@@ -296,7 +316,8 @@ export const DetailScreen = {
     const src = this.currentSource || null;
     const detail = this.detail || null;
 
-    const year = String(detail?.year || src?.year || this.year || "").trim();
+    const work = this.workDetails || null;
+    const year = String(work?.year || detail?.year || src?.year || this.year || "").trim();
     const typeLabel = String(
       detail?.type_name
       || src?.type_name
@@ -313,10 +334,20 @@ export const DetailScreen = {
 
     const tags = this.container.querySelector("#detailTags");
     if (tags) {
+      // Provider genres replace the source site's class; the rating names its
+      // source ("豆瓣 7.3") so a TMDB or Bangumi score is never mistaken for
+      // a douban one.
+      const genres = work?.genres?.length ? work.genres.join(" / ") : "";
+      const votes = formatVotes(work?.rating?.votes);
+      const ratingLabel = work?.rating
+        ? `${work.rating.source} ${work.rating.value}${votes ? `（${votes}）` : ""}`
+        : "";
       const parts = [
+        ratingLabel,
         year,
         typeLabel,
-        className && className !== typeLabel ? className : "",
+        genres || (className && className !== typeLabel ? className : ""),
+        work?.duration && !(epCount > 1) ? work.duration : "",
         epCount > 1 ? `${epCount} 集` : "",
         quality
       ].filter(Boolean);
@@ -333,7 +364,7 @@ export const DetailScreen = {
 
     const desc = this.container.querySelector("#detailDesc");
     if (desc) {
-      const text = String(detail?.desc || src?.desc || "").trim();
+      const text = String(work?.summary || detail?.desc || src?.desc || "").trim();
       desc.textContent = text;
       desc.style.display = text ? "" : "none";
     }
@@ -341,8 +372,8 @@ export const DetailScreen = {
     const cast = this.container.querySelector("#detailCast");
     if (cast) {
       const lines = [];
-      const director = detail?.director || src?.director;
-      const actor = detail?.actor || src?.actor;
+      const director = (work?.directors?.length ? work.directors.join(" / ") : "") || detail?.director || src?.director;
+      const actor = (work?.cast?.length ? work.cast.slice(0, 6).join(" / ") : "") || detail?.actor || src?.actor;
       const remarks = detail?.remarks || src?.remarks;
       if (director) lines.push(`导演：${escapeHtml(String(director))}`);
       if (actor) lines.push(`主演：${escapeHtml(String(actor))}`);
@@ -706,6 +737,8 @@ export const DetailScreen = {
       return;
     }
     this.preferCancelled = true; // prevent late autoplay after manual nav
+    // Continue watching reopens by the source's title; keep the work under it.
+    if (this.work) rememberWork(source.title || source.search_title, source.year, this.work);
 
     // Resume from the saved play record when available:
     //   - "preferResume" (auto-play / main Play button) jumps to the recorded
@@ -850,6 +883,7 @@ export const DetailScreen = {
       year: r.year || this.year || ""
     };
     LocalLibrary.addFavorite(key, favorite);
+    if (this.work) rememberWork(favorite.search_title, favorite.year, this.work);
     LibrarySync.pushFavorite(key, favorite);
     this._updateFavoriteButton();
     showToast("已收藏");
