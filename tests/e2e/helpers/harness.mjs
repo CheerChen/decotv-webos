@@ -18,8 +18,10 @@ export async function bootToHome(page) {
     route.fulfill({ status: 200, contentType: "application/javascript", body: "// stubbed for e2e" })
   );
 
-  // 2) Block the one external request the app makes (search anime tab).
+  // 2) Block Bangumi (anime tabs, home 热门动漫 row, Bangumi details).
+  //    Specs that need it register their own routes after boot.
   await page.route("https://api.bgm.tv/**", (route) => route.abort());
+  await page.route("https://next.bgm.tv/**", (route) => route.abort());
 
   // 3) Fake the entire decotv API.
   await page.route("**/api/**", (route) => handleApi(route, state));

@@ -189,46 +189,27 @@ export const TYPE_CONFIGS = {
       ],
     },
   },
+  // ── Anime: Bangumi catalog, whichever provider the other tabs use ──
+  // `catalog: "bangumi"` makes the search screen skip the douban/tmdb split
+  // for this tab (see bangumiCatalog.js).
   "hot-anime": {
     label: "热门动漫",
-    endpoint: "mixed-anime",
+    catalog: "bangumi",
+    endpoint: "bangumi-hot",
     filters: [
       {
         id: "type", label: "分类",
         options: [
-          { label: "全部", value: "tv_animation" },
+          { label: "全部", value: "" },
           { label: "国产", value: "华语" },
           { label: "日本", value: "日本" },
           { label: "欧美", value: "欧美" },
           { label: "每日放送", value: "每日放送" },
         ],
-        default: "tv_animation",
+        default: "",
       },
     ],
     hasWeekday: true,
-    // TMDB has no airing-calendar equivalent; use discover with the
-    // animation genre, sorted by popularity. The chart chip becomes a
-    // sort selector instead.
-    tmdb: {
-      endpoint: "discover",
-      mediaType: "tv",
-      genrePreset: "16",
-      // Chinese 动漫 ≈ Japanese animation. 地区=全部 defaults to ja so the
-      // tab isn't flooded with US cartoons; picking 日本/欧美/华语 narrows
-      // to that country's animation via the language param.
-      defaultLanguage: "ja",
-      filters: [
-        {
-          id: "sort", label: "排序",
-          options: [
-            { label: "热门", value: "popularity" },
-            { label: "高分", value: "vote_average" },
-            { label: "最新", value: "first_air_date" },
-          ],
-          default: "popularity",
-        },
-      ],
-    },
   },
   "hot-show": {
     label: "热门综艺",
@@ -318,26 +299,13 @@ export const TYPE_CONFIGS = {
   },
   anime: {
     label: "动漫",
-    endpoint: "recommend",
-    recKind: "tv",
-    recFormat: "电视剧",
-    recCategory: "动画",
+    catalog: "bangumi",
+    endpoint: "bangumi-browse",
     filters: [
       { id: "region", label: "地区", options: REGIONS_ANIME, default: "" },
       { id: "year", label: "年代", options: YEAR_OPTIONS, default: "all" },
       { id: "sort", label: "排序", options: SORT_OPTIONS, default: "S" },
     ],
-    tmdb: {
-      endpoint: "discover",
-      mediaType: "tv",
-      genrePreset: "16",
-      defaultLanguage: "ja",
-      filters: [
-        { id: "region", label: "地区", options: REGIONS_ANIME, default: "" },
-        { id: "year", label: "年代", options: YEAR_OPTIONS, default: "all" },
-        { id: "sort", label: "排序", options: SORT_OPTIONS, default: "S" },
-      ],
-    },
   },
   show: {
     label: "综艺",

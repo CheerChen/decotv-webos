@@ -1,15 +1,18 @@
 // searchScreen.js — category browse screen for movie / tv / anime / show / documentary.
 // TV-first: pure D-pad navigation through category chips, no text input.
 //
-// Two endpoint families:
+// Endpoint families:
 //   recent_hot  — Douban "recent hot" charts (sub-charts by category+type).
 //   recommend   — Douban recommendation pool with multi-dimensional filters
 //                 (category + region + year + sort), orthogonal combination.
+//   bangumi-*   — the anime tabs, served by Bangumi whatever the provider
+//                 (bangumiCatalog.js).
 //
 // Tab structure (11 content tabs):
-//   热门电影/剧集/动漫/综艺 → recent_hot chart browsing
-//   电影/剧集/动漫/综艺     → recommend multi-filter (default sort=S, classic/high-rated)
-//   纪录片                  → mixed: default recent_hot, "精选筛选" mode → recommend
+//   热门电影/剧集/综艺 → recent_hot chart browsing
+//   电影/剧集/综艺     → recommend multi-filter (default sort=S, classic/high-rated)
+//   热门动漫/动漫      → Bangumi: trending pool (+ 每日放送 calendar) / search
+//   纪录片             → mixed: default recent_hot, "精选筛选" mode → recommend
 //
 // Large result sets auto-load downward: when focus approaches the end of
 // the grid (and the set qualifies as large — see LARGE_RESULT_MIN), up to
@@ -25,6 +28,7 @@ import { posterAttrs } from "../../posterImage.js";
 import { escapeHtml, formatVotes } from "../../utils.js";
 import { showToast } from "../../toast.js";
 import { TYPE_CONFIGS, WEEKDAYS, todayWeekday, bangumiToCards } from "./browseConfig.js";
+import { getHotAnimePage, getAnimeBrowsePage } from "../../../core/catalog/bangumiCatalog.js";
 
 // Page size for category browse. 20 on BOTH providers: TMDB v3 hard-caps
 // every page at 20, so Douban matches it to keep provider behaviour
@@ -132,7 +136,7 @@ export const SearchScreen = {
     for (const f of acfg.filters) {
       this.filterValues[f.id] = f.default;
     }
-    this.selectedWeekday = (this.provider === "douban" && this.type === "hot-anime") ? todayWeekday() : null;
+    this.selectedWeekday = cfg.hasWeekday ? todayWeekday() : null;
     const activeTab = `nav-${this.type}`;
     this.container.innerHTML = `
       ${renderNavHeader(activeTab)}
@@ -153,6 +157,7 @@ export const SearchScreen = {
   // Douban fields live on the tab root; TMDB fields live under .tmdb.
   _activeConfig(cfg) {
     cfg = cfg || TYPE_CONFIGS[this.type] || TYPE_CONFIGS["hot-movie"];
+    if (cfg.catalog === "bangumi") return cfg;
     if (this.provider === "tmdb" && cfg.tmdb) return cfg.tmdb;
     return cfg;
   },
@@ -183,10 +188,9 @@ export const SearchScreen = {
       rows.push(`<div class="chip-row${scrollClass}" id="row-${f.id}"><span class="chip-label">${f.label}</span>${scrollWrap}</div>`);
     }
 
-    // Weekday row for hot-anime "每日放送" (Douban only — TMDB has no
-    // airing calendar).
+    // Weekday row for hot-anime "每日放送" (Bangumi calendar).
     let weekdayHtml = "";
-    if (this.provider === "douban" && cfg.hasWeekday && this.filterValues.type === "每日放送") {
+    if (cfg.hasWeekday && this.filterValues.type === "每日放送") {
       weekdayHtml = `<div class="chip-row" id="weekdayRow"><span class="chip-label">星期</span>${
         WEEKDAYS.map((d) => {
           const active = d.value === this.selectedWeekday ? " active" : "";
@@ -297,6 +301,9 @@ export const SearchScreen = {
     const cfg = TYPE_CONFIGS[this.type];
     const fv = this.filterValues;
 
+    // ── Bangumi catalog (anime tabs), independent of the provider ──
+    if (cfg.catalog === "bangumi") return this._fetchBangumi(cfg, fv, start);
+
     // ── TMDB provider ──
     if (this.provider === "tmdb" && cfg.tmdb) {
       try {
@@ -317,33 +324,8 @@ export const SearchScreen = {
       }
     }
 
-    // ── mixed-anime (hot-anime): 全部/每日放送 → recent_hot, 国家 → recommend ──
-    if (cfg.endpoint === "mixed-anime") {
-      const t = fv.type;
-      // Bangumi special case for "每日放送".
-      if (t === "每日放送") {
-        const calendar = await api.getBangumiCalendar();
-        return bangumiToCards(calendar, this.selectedWeekday);
-      }
-      // "全部" → recent_hot anime chart.
-      if (t === "tv_animation") {
-        const data = await api.getDoubanCategories("tv", "tv", "tv_animation", PAGE_SIZE, start);
-        return Array.isArray(data?.list) ? data.list : [];
-      }
-      // Country filter (华语/日本/欧美) → recommend category=动画, sort=U (近期热度).
-      const data = await api.getDoubanRecommends("tv", {
-        category: "动画", format: "电视剧", region: t, sort: "U", limit: PAGE_SIZE, start,
-      });
-      return Array.isArray(data?.list) ? data.list : [];
-    }
-
     // ── recent_hot ──
     if (cfg.endpoint === "recent_hot") {
-      // Bangumi special case for hot-anime "每日放送".
-      if (cfg.hasWeekday && fv.type === "每日放送") {
-        const calendar = await api.getBangumiCalendar();
-        return bangumiToCards(calendar, this.selectedWeekday);
-      }
       const kind = cfg.rhKind;
       const category = cfg.rhCategory || fv.category;
       const type = fv.type;
@@ -386,6 +368,19 @@ export const SearchScreen = {
     return [];
   },
 
+  // Anime tabs: 热门 pool (or the 每日放送 calendar) and the 动漫 browse.
+  async _fetchBangumi(cfg, fv, start) {
+    if (cfg.endpoint === "bangumi-hot") {
+      if (fv.type === "每日放送") {
+        // The calendar is one day's whole list: no further pages.
+        if (start > 0) return [];
+        return bangumiToCards(await api.getBangumiCalendar(), this.selectedWeekday);
+      }
+      return getHotAnimePage(fv.type, start, PAGE_SIZE);
+    }
+    return getAnimeBrowsePage({ region: fv.region, year: fv.year, sort: fv.sort }, start);
+  },
+
   // TMDB provider: route to the chart or discover endpoint.
   // `tcfg` is the cfg.tmdb block (endpoint, mediaType, genrePreset, ...).
   async _fetchTmdb(tcfg, fv, page) {
@@ -401,15 +396,11 @@ export const SearchScreen = {
       // showWhen). "curated" mode: pass through all filters.
       const genre = tcfg.genrePreset || fv.genre || "";
       const sort = (fv.mode === "hot" && !fv.sort) ? "popularity" : (fv.sort || "popularity");
-      // Anime tab: 地区=全部 means Japanese animation (defaultLanguage), a
-      // picked region (日本/欧美/华语) maps to that country's language.
       const region = fv.region || "";
-      const language = (!region && tcfg.defaultLanguage) ? tcfg.defaultLanguage : "";
       const data = await tmdb.getDiscover({
         mediaType,
         genre,
         region,
-        language,
         year: fv.year || "",
         sort,
         page,
@@ -492,8 +483,8 @@ export const SearchScreen = {
       if (label === "全部" && acfg.filters.length > 1) continue;
       parts.push(label);
     }
-    // Add weekday for hot-anime 每日放送 (Douban only).
-    if (this.provider === "douban" && cfg.hasWeekday && this.filterValues.type === "每日放送") {
+    // Add weekday for hot-anime 每日放送.
+    if (cfg.hasWeekday && this.filterValues.type === "每日放送") {
       const wd = WEEKDAYS.find((d) => d.value === this.selectedWeekday);
       parts.push(wd?.label || this.selectedWeekday);
     }

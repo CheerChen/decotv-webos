@@ -12,22 +12,18 @@ import { episodeLabel, hasVersionLabels } from "../../../core/network/sourceRank
 import { renderNavHeader, bindNavClicks, handleNavAction } from "../../navigation/navHeader.js";
 import { posterAttrs } from "../../posterImage.js";
 import { escapeHtml, formatTime, formatVotes } from "../../utils.js";
+import { getHotAnimePage } from "../../../core/catalog/bangumiCatalog.js";
 
 // Home rows. `fetch` selects the API:
 //   douban     — subject_collection 热门 charts via doubanDirect (rexxar)
 //   categories — recent_hot charts via doubanDirect (rexxar);
-//                same defaults as the 热门动漫 / 热门综艺 tabs)
+//                same defaults as the 热门综艺 tab)
+//   bangumi    — the 热门动漫 tab's Bangumi pool, whatever the provider
 // Classic / 最新* rows removed — those live under the category tabs.
 const ROWS = [
   { title: "热门电影", fetch: "douban", type: "movie", tag: "热门" },
   { title: "热门剧集", fetch: "douban", type: "tv", tag: "热门" },
-  {
-    title: "热门动漫",
-    fetch: "categories",
-    kind: "tv",
-    category: "tv",
-    type: "tv_animation"
-  },
+  { title: "热门动漫", fetch: "bangumi" },
   {
     title: "热门综艺",
     fetch: "categories",
@@ -135,6 +131,7 @@ export const HomeScreen = {
   },
 
   async _fetchRow(row) {
+    if (row.fetch === "bangumi") return getHotAnimePage("", 0, PAGE_SIZE);
     // TMDB provider: home rows mirror the search tabs' data sources.
     if (this.provider === "tmdb") {
       return this._fetchTmdbRow(row);
@@ -159,12 +156,7 @@ export const HomeScreen = {
   // anime/show), so home and tabs stay consistent.
   async _fetchTmdbRow(row) {
     let data;
-    if (row.fetch === "categories" && row.type === "tv_animation") {
-      // 热门动漫 → Japanese animation (anime tab default).
-      data = await tmdb.getDiscover({
-        mediaType: "tv", genre: "16", language: "ja", sort: "popularity", page: 1,
-      });
-    } else if (row.fetch === "categories" && row.type === "show") {
+    if (row.fetch === "categories" && row.type === "show") {
       // 热门综艺 → reality (综艺 tab).
       data = await tmdb.getDiscover({
         mediaType: "tv", genre: "10764", sort: "popularity", page: 1, dedupe: "1",
