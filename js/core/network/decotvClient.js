@@ -206,8 +206,7 @@ export class DecoTVClient {
     if (Array.isArray(direct)) {
       return { code: 200, message: "获取成功", list: direct };
     }
-    // Mid-stream offset the paginator cannot join (restored snapshot, new
-    // process): end the list quietly instead of erroring auto-load.
+    // A failed auto-load page ends the list quietly instead of erroring.
     if (Number(opts.start || 0) > 0) {
       return { code: 200, message: "获取成功", list: [] };
     }

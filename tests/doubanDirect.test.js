@@ -5,6 +5,7 @@ import {
   buildRecommendPath,
   mapRexxarItem,
   getRecommendPage,
+  pickVoteFloor,
   getRecentHotPage,
   getChartPage,
   _resetForTest
@@ -14,16 +15,21 @@ import {
 
 let serviceCalls = [];
 let responseQueue = [];
+// Optional path -> response|Error function; takes precedence over the queue.
+// Recommend loads fire their chunks in parallel, so they are answered by
+// path (the chunk's start/count) rather than by call order.
+let responder = null;
 
 function installLuna() {
   serviceCalls = [];
   responseQueue = [];
+  responder = null;
   globalThis.window = {
     webOS: {
       service: {
         request(uri, options) {
           serviceCalls.push({ uri, method: options.method, parameters: options.parameters });
-          const next = responseQueue.shift();
+          const next = responder ? responder(options.parameters.path) : responseQueue.shift();
           if (!next) {
             options.onFailure({ errorText: "NO_MOCK_RESPONSE" });
             return;
@@ -51,6 +57,18 @@ function rexxarResponse(items) {
     body: JSON.stringify({ total: 500, items })
   };
 }
+
+// Serve `pool` as rexxar would: each chunk is the slice at its start/count.
+function servePool(pool) {
+  responder = (path) => {
+    const q = new URLSearchParams(path.split("?")[1]);
+    const start = Number(q.get("start"));
+    return rexxarResponse(pool.slice(start, start + Number(q.get("count"))));
+  };
+}
+
+// One load = one parallel round of chunk requests.
+const CHUNKS_PER_LOAD = 5;
 
 function rawItem(id, votes, title = `item-${id}`, type = "movie") {
   return {
@@ -132,36 +150,95 @@ describe("mapRexxarItem", () => {
 
 // ── direct page serving ───────────────────────────────────────────────────
 
+describe("pickVoteFloor", () => {
+  const withVotes = (...votes) => votes.map((v, i) => ({ id: String(i), votes: v }));
+
+  test("keeps the strictest step that still fills a page", () => {
+    assert.equal(pickVoteFloor(withVotes(20000, 20000, 500), 2), 10000);
+    assert.equal(pickVoteFloor(withVotes(20000, 5000, 500), 2), 3000);
+    assert.equal(pickVoteFloor(withVotes(20000, 1500, 500), 2), 1000);
+  });
+
+  test("never goes below the last step", () => {
+    assert.equal(pickVoteFloor(withVotes(500, 400), 2), 1000);
+    assert.equal(pickVoteFloor([], 20), 1000);
+  });
+});
+
 describe("getRecommendPage", () => {
   test("returns null without Luna transport (browser dev falls back)", async () => {
     removeLuna();
     assert.equal(await getRecommendPage("movie", { sort: "S", start: 0 }, 20), null);
   });
 
+  test("one parallel round of chunks serves every page of a query", async () => {
+    installLuna();
+    const pool = [];
+    for (let i = 0; i < 70; i++) pool.push(rawItem(i, 500000));
+    servePool(pool);
+
+    const q = (start) => ({ region: "日本", year: "2025", sort: "S", start });
+    const pages = [];
+    for (const start of [0, 20, 40, 60, 70]) {
+      pages.push(await getRecommendPage("movie", q(start), 20));
+    }
+    assert.deepEqual(pages.map((p) => p.length), [20, 20, 20, 10, 0]);
+    // Fixed offsets covering rexxar's 500-item cap, nothing after.
+    const chunks = serviceCalls.map((c) => {
+      const q = new URLSearchParams(c.parameters.path.split("?")[1]);
+      return `${q.get("start")}+${q.get("count")}`;
+    });
+    assert.deepEqual(chunks, ["0+100", "100+100", "200+100", "300+100", "400+100"]);
+    assert.deepEqual(pages.flat().map((i) => i.id), pool.map((i) => i.id));
+    removeLuna();
+  });
+
   test("vote floor filters low-vote items out of sort=S pages", async () => {
     installLuna();
-    // 60 raw items: alternating high/low votes. A strict 10k floor keeps 30.
-    const batch = [];
-    for (let i = 0; i < 60; i++) {
-      batch.push(rawItem(i, i % 2 === 0 ? 500000 : 3000));
-    }
-    responseQueue.push(rexxarResponse(batch));
+    // Alternating high/low votes: 30 of 60 clear 10k, enough for a page.
+    const pool = [];
+    for (let i = 0; i < 60; i++) pool.push(rawItem(i, i % 2 === 0 ? 500000 : 3000));
+    servePool(pool);
 
-    const page = await getRecommendPage("movie", { region: "华语", sort: "S", start: 0 }, 20);
-    assert.equal(page.length, 20);
-    for (const item of page) {
+    const page1 = await getRecommendPage("movie", { region: "华语", sort: "S", start: 0 }, 20);
+    const page2 = await getRecommendPage("movie", { region: "华语", sort: "S", start: 20 }, 20);
+    assert.equal(page1.length, 20);
+    assert.equal(page2.length, 10);
+    for (const item of page1.concat(page2)) {
       assert.ok(item.votes >= 10000, `votes ${item.votes} passed the floor`);
     }
-    // exactly one upstream request served the whole page (batch 60 → 30 kept)
-    assert.equal(serviceCalls.length, 1);
+    removeLuna();
+  });
+
+  test("a narrow query gets every item above the looser floor", async () => {
+    installLuna();
+    // 13 items clear 10k (short of a page), 24 more sit at 3k-10k, the rest
+    // below 1k. The floor drops to 3k over the WHOLE pool: all 37 survive,
+    // in upstream order — the 3k-10k items are not lost to an earlier,
+    // stricter pass.
+    const pool = [];
+    for (let i = 0; i < 13; i++) pool.push(rawItem(i, 50000));
+    for (let i = 13; i < 37; i++) pool.push(rawItem(i, 5000));
+    for (let i = 37; i < 200; i++) pool.push(rawItem(i, 300));
+    pool.sort((a, b) => (Number(a.id) * 7919) % 200 - (Number(b.id) * 7919) % 200);
+    servePool(pool);
+
+    const q = (start) => ({ region: "日本", year: "2025", sort: "S", start });
+    const served = [];
+    for (const start of [0, 20, 40]) served.push(...await getRecommendPage("movie", q(start), 20));
+    assert.equal(served.length, 37);
+    assert.ok(served.every((item) => item.votes >= 3000));
+    assert.deepEqual(served.map((i) => i.id),
+      pool.filter((i) => i.rating.count >= 3000).map((i) => i.id));
+    assert.equal(serviceCalls.length, CHUNKS_PER_LOAD);
     removeLuna();
   });
 
   test("non-S sorts pass through without vote filtering", async () => {
     installLuna();
-    const batch = [];
-    for (let i = 0; i < 25; i++) batch.push(rawItem(i, 12));
-    responseQueue.push(rexxarResponse(batch));
+    const pool = [];
+    for (let i = 0; i < 25; i++) pool.push(rawItem(i, 12));
+    servePool(pool);
 
     const page = await getRecommendPage("movie", { sort: "U", start: 0 }, 20);
     assert.equal(page.length, 20);
@@ -169,108 +246,98 @@ describe("getRecommendPage", () => {
     removeLuna();
   });
 
-  test("floor steps down for starving queries but never below the last step", async () => {
+  test("dedupes repeated ids and drops non-movie/tv items", async () => {
     installLuna();
-    // Five distinct low-vote batches: two starve at 10k (→ step to 3k),
-    // two starve at 3k (→ step to 1k), the fifth finally survives.
-    const batchOf = (base) => {
-      const items = [];
-      for (let i = 0; i < 60; i++) items.push(rawItem(base + i, 1200));
-      return rexxarResponse(items);
-    };
-    responseQueue.push(batchOf(0), batchOf(100), batchOf(200), batchOf(300), batchOf(400));
-
-    const page = await getRecommendPage("movie", { sort: "S", start: 0 }, 20);
-    assert.equal(page.length, 20);
-    // 1200 votes only survive at the 1000 floor
-    assert.ok(page.every((item) => item.votes >= 1000));
-    assert.equal(serviceCalls.length, 5);
-    removeLuna();
-  });
-
-  test("sub-floor items never return even after the floor loosens", async () => {
-    installLuna();
-    const batch1 = [];
-    for (let i = 0; i < 60; i++) batch1.push(rawItem(i, 500)); // all below 1000
-    const batch2 = [];
-    for (let i = 100; i < 160; i++) batch2.push(rawItem(i, 400000));
-    responseQueue.push(rexxarResponse(batch1), rexxarResponse(batch1),
-      rexxarResponse(batch1), rexxarResponse(batch1),
-      rexxarResponse(batch2)); // finally a high-vote batch ends the page
-
-    const page = await getRecommendPage("movie", { sort: "S", start: 0 }, 20);
-    assert.equal(page.length, 20);
-    assert.ok(page.every((item) => item.votes >= 10000));
-    // no sub-1000 item leaked into the output despite floor stepping
-    assert.ok(!page.some((item) => item.votes < 1000));
-    removeLuna();
-  });
-
-  test("dedupes ids repeated across upstream batches", async () => {
-    installLuna();
-    const batch = [];
-    for (let i = 0; i < 60; i++) batch.push(rawItem(i % 30, 500000)); // 30 unique ids, repeated
-    responseQueue.push(rexxarResponse(batch));
-
-    const page = await getRecommendPage("movie", { sort: "S", start: 0 }, 20);
-    const ids = new Set(page.map((i) => i.id));
-    assert.equal(ids.size, 20);
-    removeLuna();
-  });
-
-  test("short page at upstream exhaustion, then empty page", async () => {
-    installLuna();
-    const small = [rawItem(1, 500000), rawItem(2, 400000), rawItem(3, 300000)];
-    // Batch 1 is short but NOT empty — rexxar does this mid-pool, so the
-    // paginator must keep going. The empty batch is what ends the stream.
-    responseQueue.push(rexxarResponse(small), rexxarResponse([]));
+    const pool = [];
+    for (let i = 0; i < 60; i++) pool.push(rawItem(i % 30, 500000)); // 30 unique ids, repeated
+    pool.push({ id: "x", type: "doulist", title: "list" });
+    servePool(pool);
 
     const page1 = await getRecommendPage("movie", { sort: "S", start: 0 }, 20);
-    assert.equal(page1.length, 3);
-    assert.equal(serviceCalls.length, 2);
-
-    const page2 = await getRecommendPage("movie", { sort: "S", start: 3 }, 20);
-    assert.equal(page2.length, 0);
+    const page2 = await getRecommendPage("movie", { sort: "S", start: 20 }, 20);
+    const ids = page1.concat(page2).map((i) => i.id);
+    assert.equal(ids.length, 30);
+    assert.equal(new Set(ids).size, 30);
     removeLuna();
   });
 
-  test("offset mismatch falls back (returns null)", async () => {
+  test("revisiting a query serves from the pool without a request", async () => {
     installLuna();
-    const batch = [];
-    for (let i = 0; i < 60; i++) batch.push(rawItem(i, 500000));
-    responseQueue.push(rexxarResponse(batch));
-
-    const page = await getRecommendPage("movie", { sort: "S", start: 0 }, 20);
-    assert.equal(page.length, 20);
-    // paginator cursor is at 20; a start=40 call cannot be served directly
-    assert.equal(await getRecommendPage("movie", { sort: "S", start: 40 }, 20), null);
-    removeLuna();
-  });
-
-  test("start=0 on a used paginator replays it instead of failing", async () => {
-    installLuna();
-    // Two batches: 20 high-vote + filler, then another 20 high-vote.
-    const b1 = [], b2 = [];
-    for (let i = 0; i < 60; i++) b1.push(rawItem(i, 500000));
-    for (let i = 60; i < 120; i++) b2.push(rawItem(i, 500000));
-    responseQueue.push(rexxarResponse(b1), rexxarResponse(b2), rexxarResponse(b1));
+    const pool = [];
+    for (let i = 0; i < 60; i++) pool.push(rawItem(i, 500000));
+    servePool(pool);
 
     const page1 = await getRecommendPage("movie", { sort: "S", start: 0 }, 20);
-    assert.equal(page1.length, 20);
-    // Re-enter the same filter (e.g. user scrolled, left, came back):
-    // served=20 ≠ start=0 used to return null — which now surfaces as
-    // DOUBAN_DIRECT_UNAVAILABLE. It must reset and replay instead.
+    await getRecommendPage("movie", { sort: "S", start: 20 }, 20);
     const replay = await getRecommendPage("movie", { sort: "S", start: 0 }, 20);
-    assert.ok(Array.isArray(replay));
-    assert.equal(replay.length, 20); // refilled from upstream, full page
-    assert.ok(replay.every((item) => item.votes >= 10000));
+    assert.deepEqual(replay, page1);
+    assert.equal(serviceCalls.length, CHUNKS_PER_LOAD);
     removeLuna();
   });
 
-  test("fresh module with start>0 falls back (no mid-stream join)", async () => {
+  test("a first call at start>0 loads the pool and serves that offset", async () => {
     installLuna();
-    assert.equal(await getRecommendPage("movie", { sort: "S", start: 40 }, 20), null);
-    assert.equal(serviceCalls.length, 0);
+    const pool = [];
+    for (let i = 0; i < 60; i++) pool.push(rawItem(i, 500000));
+    servePool(pool);
+
+    const page = await getRecommendPage("movie", { sort: "S", start: 40 }, 20);
+    assert.deepEqual(page.map((i) => i.id), pool.slice(40, 60).map((i) => i.id));
+    assert.equal(serviceCalls.length, CHUNKS_PER_LOAD);
+    removeLuna();
+  });
+
+  test("concurrent calls for one query share a single request", async () => {
+    installLuna();
+    const pool = [];
+    for (let i = 0; i < 60; i++) pool.push(rawItem(i, 500000));
+    servePool(pool);
+
+    const [a, b] = await Promise.all([
+      getRecommendPage("movie", { sort: "S", start: 0 }, 20),
+      getRecommendPage("movie", { sort: "S", start: 20 }, 20),
+    ]);
+    assert.equal(a.length, 20);
+    assert.equal(b.length, 20);
+    assert.equal(serviceCalls.length, CHUNKS_PER_LOAD);
+    removeLuna();
+  });
+
+  test("a failed load is retried on the next call", async () => {
+    installLuna();
+    const pool = [];
+    for (let i = 0; i < 60; i++) pool.push(rawItem(i, 500000));
+    servePool(pool);
+    const serve = responder;
+    // One chunk of the first load fails: the whole load fails (no partial
+    // pool), and the next call starts a fresh round.
+    let failed = false;
+    responder = (path) => {
+      if (!failed && path.includes("start=200")) { failed = true; return new Error("NET_1"); }
+      return serve(path);
+    };
+
+    assert.equal(await getRecommendPage("movie", { sort: "S", start: 0 }, 20), null);
+    const page = await getRecommendPage("movie", { sort: "S", start: 0 }, 20);
+    assert.equal(page.length, 20);
+    assert.equal(serviceCalls.length, 2 * CHUNKS_PER_LOAD);
+    removeLuna();
+  });
+
+  test("pools are evicted least-recently-used first", async () => {
+    installLuna();
+    servePool([rawItem(1, 500000)]);
+    const loads = () => serviceCalls.length / CHUNKS_PER_LOAD;
+
+    const q = (year) => ({ year: String(year), sort: "S", start: 0 });
+    for (let y = 2000; y < 2012; y++) await getRecommendPage("movie", q(y), 20); // 12 pools
+    await getRecommendPage("movie", q(2000), 20); // touch the oldest: no request
+    assert.equal(loads(), 12);
+    await getRecommendPage("movie", q(2012), 20); // 13th evicts 2001, not 2000
+    await getRecommendPage("movie", q(2000), 20);
+    assert.equal(loads(), 13);
+    await getRecommendPage("movie", q(2001), 20);
+    assert.equal(loads(), 14);
     removeLuna();
   });
 });
@@ -278,41 +345,44 @@ describe("getRecommendPage", () => {
 // ── circuit breaker ───────────────────────────────────────────────────────
 
 describe("circuit breaker", () => {
+  // A load whose chunks all fail counts as ONE failure, however many
+  // chunk requests it fired.
+  const failAll = () => { responder = () => new Error("NET"); };
+  const loads = () => serviceCalls.length / CHUNKS_PER_LOAD;
+
   test("opens after 3 consecutive failures and skips direct for a while", async () => {
     installLuna();
-    responseQueue.push(new Error("NET_1"), new Error("NET_2"), new Error("NET_3"));
+    failAll();
     for (let i = 0; i < 3; i++) {
       assert.equal(await getRecommendPage("movie", { sort: "S", start: 0 }, 20), null);
     }
-    assert.equal(serviceCalls.length, 3);
+    assert.equal(loads(), 3);
 
     // Breaker open: this call must not even reach the service.
     assert.equal(await getRecommendPage("movie", { sort: "S", start: 0 }, 20), null);
-    assert.equal(serviceCalls.length, 3);
+    assert.equal(loads(), 3);
     removeLuna();
   });
 
   test("a success resets the failure counter", async () => {
     installLuna();
-    const batch = [];
-    for (let i = 0; i < 60; i++) batch.push(rawItem(i, 500000));
-    // Distinct query keys per call so each failure gets a fresh paginator
-    // (a failed paginator is reset, and its next call at the same offset
-    // would serve from the previous buffer instead of hitting the network).
-    responseQueue.push(new Error("NET_1"), new Error("NET_2"), rexxarResponse(batch),
-      new Error("NET_3"), new Error("NET_4"), new Error("NET_5"));
+    const pool = [];
+    for (let i = 0; i < 60; i++) pool.push(rawItem(i, 500000));
+    const q = (region) => ({ region, sort: "S", start: 0 });
 
-    const q = (region, extra = {}) => ({ region, sort: "S", start: 0, ...extra });
+    failAll();
     assert.equal(await getRecommendPage("movie", q("华语"), 20), null);      // fail 1
     assert.equal(await getRecommendPage("movie", q("华语"), 20), null);      // fail 2
+    servePool(pool);
     const page = await getRecommendPage("movie", q("美国"), 20);            // success → reset
     assert.equal(page.length, 20);
     // Two more failures after the success: only 2 in a row, breaker NOT open.
+    failAll();
     assert.equal(await getRecommendPage("movie", q("日本"), 20), null);      // fail 1 again
     assert.equal(await getRecommendPage("movie", q("韩国"), 20), null);      // fail 2 again
-    // A sixth call still reaches the service (breaker open would skip it).
+    // A sixth load still reaches the service (breaker open would skip it).
     assert.equal(await getRecommendPage("movie", q("英国"), 20), null);
-    assert.equal(serviceCalls.length, 6);
+    assert.equal(loads(), 6);
     removeLuna();
   });
 });

@@ -22,28 +22,28 @@
 import { hasLunaTransport, lunaDoubanFetch } from "./lunaTransport.js";
 import { makeWork } from "../catalog/work.js";
 
-// How many items to pull from rexxar per upstream batch. Larger batches mean
-// fewer requests for the same filtered output; 3 external pages per request
-// keeps the JSON well under the service's 2 MiB cap.
-const UPSTREAM_BATCH = 60;
+// The whole recommend pool is fetched in ONE round per query: fixed-offset
+// chunks requested in parallel. rexxar's pool is hard-capped at 500
+// (start>=500 always comes back empty, whatever the filters), so 5 x 100
+// covers all of it. Measured against the live API:
+//   - one count=500 request takes 3-11 s upstream (the cost scales with
+//     count) and is sometimes truncated (431 of 499);
+//   - 5 parallel count=100 chunks finish in ~1.2-1.9 s wall, with no
+//     repeated ids across chunks and a superset of the single response;
+//   - advancing `start` by each batch's returned length (the old serial
+//     loop) is what produced the short, mostly-repeated tail batches.
+// A narrow query simply gets short or empty tail chunks.
+const POOL_CHUNK = 100;
+const POOL_CHUNKS = 5;
 
 // Vote-count floor steps for sort=S, strictest first. Douban's rating
 // population is far larger than TMDB's, so the floor stays high: 10k already
 // removes the fan-concert band (observed 0.5k-11k votes) while keeping any
-// broadly-seen film. The steps only loosen when a query is so narrow that
-// the strict floor starves it — a full page must still be servable.
+// broadly-seen film. The floor is chosen once over the whole pool: the
+// strictest step that still fills a page, else the last step. A narrow
+// query thus gets every item above the looser floor, not just what the
+// strict floor happened to let through.
 const VOTE_FLOOR_STEPS = [10000, 3000, 1000];
-
-// Consecutive upstream batches with (almost) no survivors before the floor
-// steps down one notch.
-const HUNGRY_STEP_THRESHOLD = 2;
-
-// Safety valve: rexxar's pagination cursor is non-strict (mid-pool batches
-// can come back short — 59/60, 16/60 observed — and items repeat), so the
-// only reliable end signal is an EMPTY batch. A pathological upstream that
-// keeps returning only already-seen items would otherwise spin; cap the
-// upstream fetches per external page well above any sane fill need.
-const MAX_FETCHES_PER_PAGE = 25;
 
 // Circuit breaker: after this many consecutive direct failures, stop trying
 // direct for the cooldown window — requests fail fast instead of paying a
@@ -51,8 +51,8 @@ const MAX_FETCHES_PER_PAGE = 25;
 const BREAKER_THRESHOLD = 3;
 const BREAKER_COOLDOWN_MS = 10 * 60 * 1000;
 
-// One paginator per query; caps memory if the user hops between many
-// category combinations (each holds a small buffer + a Set of seen ids).
+// One pool per query (LRU); caps memory if the user hops between many
+// category combinations (each holds at most 500 mapped items).
 const MAX_PAGINATORS = 12;
 
 const state = {
@@ -124,86 +124,64 @@ export function mapRexxarItem(item) {
 
 // ── paginator ─────────────────────────────────────────────────────────────
 
+// The strictest floor step that leaves at least `minCount` items, else the
+// last (loosest) step.
+export function pickVoteFloor(items, minCount) {
+  for (const floor of VOTE_FLOOR_STEPS) {
+    if (items.filter((item) => item.votes >= floor).length >= minCount) return floor;
+  }
+  return VOTE_FLOOR_STEPS[VOTE_FLOOR_STEPS.length - 1];
+}
+
+// Holds one query's filtered pool. The pool is fetched once and never
+// mutated, so any offset can be served by slicing — revisits, restored
+// snapshots and out-of-order loads all read the same list.
 class RecommendPaginator {
   constructor(kind, opts, pageSize) {
     this.kind = kind;
     this.opts = opts;
     this.pageSize = pageSize;
     this.filterByVotes = normParam(opts.sort) === "S";
-    this.floorIndex = 0;
-    this.buffer = [];
-    this.seen = new Set();
-    this.upstreamStart = 0;
-    this.exhausted = false;
-    this.hungry = 0;
-    this.served = 0;
+    this.pool = null;
+    this.loading = null; // in-flight load, shared by concurrent callers
   }
 
-  currentFloor() {
-    return this.filterByVotes ? VOTE_FLOOR_STEPS[Math.min(this.floorIndex, VOTE_FLOOR_STEPS.length - 1)] : 0;
-  }
-
-  async fetchUpstream() {
-    const path = buildRecommendPath(this.kind, this.opts, this.upstreamStart, UPSTREAM_BATCH);
-    const data = await doubanGet(path);
-    if (!data || !Array.isArray(data.items)) throw new Error("DOUBAN_BAD_SHAPE");
-    return data.items
-      .filter((item) => item && (item.type === "movie" || item.type === "tv"))
-      .map(mapRexxarItem);
-  }
-
-  async fillBuffer() {
-    let fetches = 0;
-    while (this.buffer.length < this.pageSize && !this.exhausted) {
-      if (fetches >= MAX_FETCHES_PER_PAGE) break;
-      fetches += 1;
-      const batch = await this.fetchUpstream();
-      // Empty batch = pool exhausted. A short batch is NOT reliable — rexxar
-      // returns mid-pool short batches (59/60, 16/60) and clamps at the end.
-      if (batch.length === 0) this.exhausted = true;
-      this.upstreamStart += batch.length;
-
-      const floor = this.currentFloor();
-      const survivors = [];
-      for (const item of batch) {
-        if (this.seen.has(item.id)) continue;
-        this.seen.add(item.id);
-        if (!this.filterByVotes || item.votes >= floor) survivors.push(item);
+  async fetchPool() {
+    const chunks = await Promise.all(
+      Array.from({ length: POOL_CHUNKS }, (_, i) =>
+        doubanGet(buildRecommendPath(this.kind, this.opts, i * POOL_CHUNK, POOL_CHUNK)))
+    );
+    const seen = new Set();
+    const items = [];
+    for (const data of chunks) {
+      if (!data || !Array.isArray(data.items)) throw new Error("DOUBAN_BAD_SHAPE");
+      for (const raw of data.items) {
+        if (!raw || (raw.type !== "movie" && raw.type !== "tv")) continue;
+        const item = mapRexxarItem(raw);
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+        items.push(item);
       }
-
-      // Floor stepping: batches that yield nothing pass through twice →
-      // loosen one notch. Any real yield resets the hunger counter.
-      if (survivors.length === 0 && batch.length > 0) {
-        this.hungry += 1;
-        if (this.hungry >= HUNGRY_STEP_THRESHOLD &&
-            this.floorIndex < VOTE_FLOOR_STEPS.length - 1) {
-          this.floorIndex += 1;
-          this.hungry = 0;
-        }
-      } else {
-        this.hungry = 0;
-      }
-
-      this.buffer = this.buffer.concat(survivors);
     }
+    if (!this.filterByVotes) return items;
+    const floor = pickVoteFloor(items, this.pageSize);
+    return items.filter((item) => item.votes >= floor);
   }
 
-  async next() {
-    await this.fillBuffer();
-    const page = this.buffer.slice(0, this.pageSize);
-    this.buffer = this.buffer.slice(this.pageSize);
-    this.served += page.length;
-    return page;
+  load() {
+    if (this.pool) return Promise.resolve(this.pool);
+    if (!this.loading) {
+      this.loading = this.fetchPool().then(
+        (pool) => { this.pool = pool; this.loading = null; return pool; },
+        (e) => { this.loading = null; throw e; }
+      );
+    }
+    return this.loading;
   }
 
-  reset() {
-    this.buffer = [];
-    this.seen = new Set();
-    this.upstreamStart = 0;
-    this.exhausted = false;
-    this.floorIndex = 0;
-    this.hungry = 0;
-    this.served = 0;
+  async page(start) {
+    const pool = await this.load();
+    return pool.slice(start, start + this.pageSize);
   }
 }
 
@@ -233,37 +211,20 @@ function noteSuccess() {
   state.breakerFailures = 0;
 }
 
-function getPaginator(kind, opts, pageSize, start) {
+function getPaginator(kind, opts, pageSize) {
   const key = queryKey(kind, opts, pageSize);
-  const paginator = state.paginators.get(key);
-
+  let paginator = state.paginators.get(key);
   if (paginator) {
-    // Offset divergence (restored snapshot, aborted load): the paginator
-    // cannot jump to an arbitrary filtered offset. A fresh page-0 request
-    // can be served by replaying — reset and refill from upstream.
-    // Anything else ends the list rather than serving a gap.
-    if (paginator.served !== start) {
-      if (start === 0) {
-        paginator.reset();
-        return paginator;
-      }
-      return null;
-    }
-    return paginator;
+    state.paginators.delete(key); // re-insert: most recently used last
+  } else {
+    paginator = new RecommendPaginator(kind, opts, pageSize);
   }
-
-  // Fresh join is only possible at offset 0; a fresh module with a
-  // mid-stream start (app restarted onto a restored snapshot) cannot be
-  // served without replaying every earlier filtered page.
-  if (start > 0) return null;
-
-  const created = new RecommendPaginator(kind, opts, pageSize);
-  state.paginators.set(key, created);
+  state.paginators.set(key, paginator);
   while (state.paginators.size > MAX_PAGINATORS) {
     const oldest = state.paginators.keys().next().value;
     state.paginators.delete(oldest);
   }
-  return created;
+  return paginator;
 }
 
 // Low-level rexxar GET shared by all three catalog paths. The service
@@ -275,23 +236,20 @@ async function doubanGet(path) {
 }
 
 // Returns a page (array) on success, or null when direct access is
-// unavailable/failed or the requested offset cannot be served — there is
-// no server fallback, so the caller treats null per context (page-0 load
-// fails loudly; a mid-stream gap just ends the list).
+// unavailable or failed — there is no server fallback, so the caller treats
+// null per context (page-0 load fails loudly; a mid-stream gap just ends
+// the list). Only the first call per query reaches the network; a failed
+// chunk fails the whole load — a partial pool would pick the wrong floor.
 export async function getRecommendPage(kind, opts = {}, pageSize = 24) {
   if (!directAvailable()) return null;
 
-  const paginator = getPaginator(kind, opts, pageSize, Number(opts.start || 0));
-  if (!paginator) return null;
-
+  const paginator = getPaginator(kind, opts, pageSize);
+  const hadPool = Boolean(paginator.pool);
   try {
-    const page = await paginator.next();
-    noteSuccess();
+    const page = await paginator.page(Number(opts.start || 0));
+    if (!hadPool) noteSuccess();
     return page;
   } catch (e) {
-    // The paginator's cursor may have advanced past buffered state; reset so
-    // a retry starts over instead of serving a gap.
-    paginator.reset();
     noteFailure();
     return null;
   }
