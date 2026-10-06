@@ -53,6 +53,7 @@ export const PlayerScreen = {
   sourcePanelIndex: 0,
   allSources: [],
   probeResults: new Map(),
+  preferSession: null,    // detail's live session (preferEngine), when opened from prefer mode
   currentSourceKey: "",
   _keyUpHandler: null,    // document keyup listener (FocusEngine only forwards keydown)
   _listeners: [],
@@ -77,9 +78,12 @@ export const PlayerScreen = {
     this.sourcePanelVisible = false;
     this.sourcePanelIndex = 0;
     this.allSources = Array.isArray(params.allSources) ? params.allSources : [];
-    this.probeResults = new Map(
-      Array.isArray(params.probeResults) ? params.probeResults.map(([k, v]) => [k, v]) : []
-    );
+    // Detail hands over its live probe Map (probes still running keep
+    // landing in it); an entries array is still accepted.
+    this.probeResults = params.probeResults instanceof Map
+      ? params.probeResults
+      : new Map(Array.isArray(params.probeResults) ? params.probeResults.map(([k, v]) => [k, v]) : []);
+    this.preferSession = params.preferSession || null;
     this.currentSourceKey = params.currentSourceKey || "";
     this._listeners = [];
     this.resumeTime = Math.max(0, Number(params.resumeTime || 0));
@@ -139,12 +143,15 @@ export const PlayerScreen = {
         this.allSources = controller.allSources;
         this.probeResults = controller.probeResults;
         this.currentSourceKey = controller.currentSourceKey;
+        // Back on detail restores this pick: the source last played.
+        if (this.preferSession) this.preferSession.currentSourceKey = controller.currentSourceKey;
         this.resumeTime = controller.resumeTime;
         this._resumeApplied = controller.resumeApplied;
         this._lastSaveAt = controller.lastSaveAt;
         this.recordMeta = controller.recordMeta;
         this._renderButtons();
       },
+      onSourceFailed: (key) => this.preferSession?.failedSourceKeys.add(key),
       onMetaChange: () => this._updateMeta(),
       onAdSkipState: (state) => { this._adSkip = state; },
       onSourcePanelClose: () => this._closeSourcePanel(),
@@ -234,6 +241,8 @@ export const PlayerScreen = {
       this._stallArmed = true;
       this._stall = initialStallState();
       this._renderButtons();
+      // It plays now: an earlier playback failure of this source is stale.
+      this.preferSession?.failedSourceKeys.delete(this.currentSourceKey);
     });
     on("pause", () => { this.paused = true; this._renderButtons(); this._saveRecord(true); });
     on("ended", () => this._handleEnded());

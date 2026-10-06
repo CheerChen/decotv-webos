@@ -29,10 +29,12 @@ import {
   hasVersionLabels
 } from "../../../core/network/sourceRanking.js";
 import {
-  getPreferCache,
+  getPreferSession,
   pickBestPreferSource,
+  PREFER_CONCURRENCY,
+  PREFER_PLAYBACK_CONCURRENCY,
   runPreferEngine,
-  savePreferCache
+  startPreferSession
 } from "../../../core/network/preferEngine.js";
 import {
   getCachedRelated,
@@ -66,7 +68,8 @@ export const DetailScreen = {
   sources: [],          // SearchResult[] after filtering
   currentSource: null,  // SearchResult
   episodeIndex: 0,
-  probeResults: new Map(),  // sourceKey -> probe result
+  probeResults: new Map(),  // sourceKey -> probe result (the session's Map in prefer mode)
+  preferSession: null,      // shared with the player; see preferEngine startPreferSession
   probeRunning: false,
   probeDone: 0,
   probeTotal: 0,
@@ -79,6 +82,7 @@ export const DetailScreen = {
     const epoch = this._mountEpoch;
     this.container = document.getElementById("detail");
     this.probeResults = new Map();
+    this.preferSession = null;
     this.probeRunning = false;
     this.probeDone = 0;
     this.probeTotal = 0;
@@ -149,13 +153,16 @@ export const DetailScreen = {
       return;
     }
 
-    // Fast path: returning to a detail we already searched — restore from cache,
-    // no re-search, no re-probe, no auto-play.
-    const cached = getPreferCache(this.title, this.year);
-    if (fromHistory && cached) {
-      this._restoreFromCache(cached);
+    // Fast path: returning to a detail we already searched — restore the
+    // session, no re-search, no re-probe, no auto-play.
+    const session = getPreferSession(this.title, this.year);
+    if (fromHistory && session) {
+      this._restoreFromCache(session);
       return;
     }
+
+    this.preferSession = startPreferSession(this.title, this.year);
+    this.probeResults = this.preferSession.probeResults;
 
     // Focus the primary action from the start: play is never disabled, and
     // pressing it mid-probe plays the best source measured so far.
@@ -239,22 +246,27 @@ export const DetailScreen = {
     this._renderEpisodes();
   },
 
+  // The probe Map is the session's own (written in place), so only the
+  // source list and the pick need recording. Once playback started (or the
+  // page was left) the pick belongs to the player: a background round's
+  // late reselect must not overwrite the source actually being played.
   _saveCache() {
-    if (this.mode !== "prefer" || !this.sources.length) return;
-    savePreferCache({
-      title: this.title,
-      year: this.year,
-      sources: this.sources,
-      probeResults: this.probeResults,
-      currentSourceKey: this.currentSource ? getSourceProbeKey(this.currentSource) : "",
-    });
+    const session = this.preferSession;
+    if (this.mode !== "prefer" || !session || !this.sources.length) return;
+    session.sources = this.sources;
+    if (!this.preferCancelled) {
+      session.currentSourceKey = this.currentSource ? getSourceProbeKey(this.currentSource) : "";
+    }
   },
 
-  _restoreFromCache(cache) {
-    this.sources = cache.sources;
-    this.probeResults = new Map(cache.probeResults);
+  // The pick is the session's current source: the one the player last
+  // played, when the user switched or it failed over.
+  _restoreFromCache(session) {
+    this.preferSession = session;
+    this.sources = session.sources;
+    this.probeResults = session.probeResults;
     this.currentSource = this.sources.find(
-      (s) => getSourceProbeKey(s) === cache.currentSourceKey
+      (s) => getSourceProbeKey(s) === session.currentSourceKey
     ) || this.sources[0];
     this._renderHeroMeta();
     this._maybeFetchDetail();
@@ -599,7 +611,7 @@ export const DetailScreen = {
   async _runPreferEngine({
     reselect = true,
     initialSources = null,
-    existingProbeResults = new Map(),
+    existingProbeResults = this.probeResults,
   } = {}) {
     const epoch = this._mountEpoch;
     return runPreferEngine({
@@ -616,6 +628,9 @@ export const DetailScreen = {
       // service. Returns null without the service (dev preview, non-webOS),
       // and then every source keeps ranking on its upstream label.
       measureResolution: (url, signal) => readStreamResolution(url, { signal }),
+      // A round still running when playback starts finishes on fewer
+      // workers instead of competing with the stream at full width.
+      concurrency: () => (Router.current === "player" ? PREFER_PLAYBACK_CONCURRENCY : PREFER_CONCURRENCY),
       isStale: () => epoch !== this._mountEpoch,
       canAutoPlay: () => !this.preferCancelled,
       onSources: ({ sources, probeResults }) => {
@@ -705,10 +720,14 @@ export const DetailScreen = {
       const isCurrent = this.currentSource && getSourceProbeKey(this.currentSource) === key;
       const probeCell = this._renderProbeCell(r);
       const epCount = Array.isArray(src.episodes) ? src.episodes.length : 0;
+      // Playback evidence from the player, kept apart from the probe metrics.
+      const playFailed = this.preferSession?.failedSourceKeys.has(key)
+        ? ` · <span class="probe-failed" data-play-failed>播放失败</span>`
+        : "";
       return `
         <div class="source-row${isCurrent ? " current" : ""} focusable" data-action="switch-source" data-key="${escapeHtml(key)}">
           <div class="source-row-name">${escapeHtml(src.source_name || src.source)}</div>
-          <div class="source-row-meta">${epCount} 集</div>
+          <div class="source-row-meta">${epCount} 集${playFailed}</div>
           <div class="source-row-probe">${probeCell}</div>
         </div>
       `;
@@ -813,6 +832,7 @@ export const DetailScreen = {
       return;
     }
     this.preferCancelled = true; // prevent late autoplay after manual nav
+    if (this.preferSession) this.preferSession.currentSourceKey = getSourceProbeKey(source);
     // Continue watching reopens by the source's title; keep the work under it.
     if (this.work) rememberWork(source.title || source.search_title, source.year, this.work);
 
@@ -850,10 +870,13 @@ export const DetailScreen = {
         total_episodes: source.episodes.length,
         episodes_titles: Array.isArray(source.episodes_titles) ? source.episodes_titles : []
       },
-      // Pass through all sources + current probe results so the player can
-      // offer source switching with the same ranking.
+      // Pass through all sources + the live probe Map so the player can
+      // offer source switching with the same ranking, including probes that
+      // finish after it opens. The session carries the player's switches and
+      // playback failures back to this page.
       allSources: this.sources,
-      probeResults: Array.from(this.probeResults.entries()),
+      probeResults: this.probeResults,
+      preferSession: this.preferSession,
       currentSourceKey: getSourceProbeKey(source)
     });
   },
@@ -929,7 +952,7 @@ export const DetailScreen = {
       if (action === "refresh") {
         if (!this.sources.length) { showToast("没有可测速的播放源"); return; }
         if (this.probeRunning) { showToast("测速进行中"); return; }
-        this.probeResults = new Map();
+        this.probeResults.clear(); // in place: the session shares this Map
         await this._probeAndPick();
         return;
       }

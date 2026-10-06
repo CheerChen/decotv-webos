@@ -12,8 +12,14 @@ import { FULL_HD_WIDTH, isFullHdMeasured } from "../playback/streamResolution.js
 
 export const PROBE_TIMEOUT_MS = 8000;
 export const PREFER_CONCURRENCY = 8;
+// While a video plays, a probe round that has not finished keeps going on
+// this many workers, so it completes without starving the stream.
+export const PREFER_PLAYBACK_CONCURRENCY = 2;
 export const PREFER_MAX_WAIT_MS = 12000;
-export const PREFER_BACKGROUND_MAX_MS = 60000;
+// A run is aborted only when NO probe completes for this long. Each probe is
+// already bounded (probe timeout + resolution read), so this only catches a
+// hung run; a total-time cap would cut a slow-but-progressing round short.
+export const PREFER_IDLE_ABORT_MS = 60000;
 export const PREFER_MIN_VERIFIED_FOR_AUTOPLAY = 4;
 // Start as soon as one source is MEASURED at full-HD coded width.
 export const PREFER_FULL_HD_WIDTH = FULL_HD_WIDTH;
@@ -30,29 +36,38 @@ export function hitsQualityShortcut(result, labelShortcutRank = PREFER_QUALITY_S
   return getQualityRank(result) >= labelShortcutRank;
 }
 
-let preferCache = null;
+// The prefer session: the one live record of a work's source search and
+// probing, shared by detail and player. Both hold the SAME objects — the
+// probe Map the engine writes into, the source the player last switched
+// to, the sources whose playback failed — so a probe finishing while the
+// player is up, or a failover in the player, is seen by the other screen
+// without copying. One session at a time (the work being watched).
+let preferSession = null;
 
 export function preferCacheKey(title, year) {
   return `p:${title || ""}|${year || ""}`;
 }
 
-export function savePreferCache({ title, year, sources, probeResults, currentSourceKey }) {
-  if (!Array.isArray(sources) || !sources.length) return;
-  preferCache = {
+// A fresh session for a new visit (fresh search): drops any earlier one.
+export function startPreferSession(title, year) {
+  preferSession = {
     key: preferCacheKey(title, year),
-    sources,
-    probeResults: Array.from(probeResults instanceof Map ? probeResults.entries() : probeResults || []),
-    currentSourceKey: currentSourceKey || "",
+    sources: [],
+    probeResults: new Map(),
+    currentSourceKey: "",
+    failedSourceKeys: new Set(),
   };
+  return preferSession;
 }
 
-export function getPreferCache(title, year) {
+// The current session for this work, if it already found sources.
+export function getPreferSession(title, year) {
   const key = preferCacheKey(title, year);
-  return preferCache?.key === key && preferCache.sources?.length ? preferCache : null;
+  return preferSession?.key === key && preferSession.sources.length ? preferSession : null;
 }
 
-export function clearPreferCache() {
-  preferCache = null;
+export function clearPreferSession() {
+  preferSession = null;
 }
 
 // Title identity for matching: letters and digits only. Resource sites spell
@@ -217,7 +232,7 @@ export async function runPreferEngine({
   concurrency = PREFER_CONCURRENCY,
   probeTimeoutMs = PROBE_TIMEOUT_MS,
   maxWaitMs = PREFER_MAX_WAIT_MS,
-  backgroundMaxMs = PREFER_BACKGROUND_MAX_MS,
+  idleAbortMs = PREFER_IDLE_ABORT_MS,
   minVerifiedForAutoplay = PREFER_MIN_VERIFIED_FOR_AUTOPLAY,
   qualityShortcutRank = PREFER_QUALITY_SHORTCUT_RANK,
 } = {}) {
@@ -230,7 +245,9 @@ export async function runPreferEngine({
       if (sources.length) break;
     }
   }
-  const probeResults = new Map(existingProbeResults instanceof Map ? existingProbeResults : []);
+  // Written in place: the caller's Map is the session's, which the player
+  // reads while a round is still running.
+  const probeResults = existingProbeResults instanceof Map ? existingProbeResults : new Map();
   if (isStale()) return { sources, probeResults, best: null, autoPlayFired: false, stale: true };
   onSources?.({ sources, probeResults });
   if (!sources.length || isStale()) return { sources, probeResults, best: null, autoPlayFired: false, stale: isStale() };
@@ -243,8 +260,16 @@ export async function runPreferEngine({
     return { sources, probeResults, best, autoPlayFired: autoPlay && canAutoPlay(), stale: false };
   }
 
+  // `concurrency` is a number or a function read before each new probe, so
+  // a caller can narrow a running round (e.g. while a video plays).
+  const limit = typeof concurrency === "function" ? concurrency : () => concurrency;
   const controller = new AbortController();
-  const hardDeadline = setTimeout(() => controller.abort(), backgroundMaxMs);
+  let idleTimer = null;
+  const armIdleAbort = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => controller.abort(), idleAbortMs);
+  };
+  armIdleAbort();
   const results = [];
   let nextIndex = 0;
   let probeDone = sources.length - pending.length;
@@ -315,13 +340,17 @@ export async function runPreferEngine({
     }
   };
 
-  const worker = async () => {
+  // Worker `slot` stops taking new sources once the limit drops to it or
+  // below; the remaining workers finish the round.
+  const worker = async (slot) => {
     while (!controller.signal.aborted) {
       if (isStale()) return;
+      if (slot >= Math.max(1, limit())) return;
       const i = nextIndex++;
       if (i >= pending.length) return;
       const result = await probeOne(pending[i]);
       if (result.testResult?.stale) return;
+      armIdleAbort();
       results.push(result);
       probeDone++;
       if (isVerifiedPlaybackResult(result.testResult)
@@ -350,9 +379,9 @@ export async function runPreferEngine({
   }, maxWaitMs);
 
   try {
-    await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, () => worker()));
+    await Promise.all(Array.from({ length: Math.min(limit(), pending.length) }, (_, slot) => worker(slot)));
   } finally {
-    clearTimeout(hardDeadline);
+    clearTimeout(idleTimer);
     clearTimeout(softDeadline);
   }
 

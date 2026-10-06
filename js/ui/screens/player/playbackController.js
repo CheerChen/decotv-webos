@@ -31,6 +31,7 @@ export class PlaybackController {
     resumeTime = 0,
     recordMeta = null,
     onStateChange,
+    onSourceFailed,
     onMetaChange,
     onAdSkipState,
     onSourcePanelClose,
@@ -60,6 +61,7 @@ export class PlaybackController {
     this._proxyFailed = false;     // proxy already failed for this source — don't re-proxy
     this._filteredAdCount = 0;     // number of ad groups stripped by the proxy (for OSD badge)
     this.onStateChange = onStateChange;
+    this.onSourceFailed = onSourceFailed;
     this.onMetaChange = onMetaChange;
     this.onAdSkipState = onAdSkipState;
     this.onSourcePanelClose = onSourcePanelClose;
@@ -408,6 +410,7 @@ export class PlaybackController {
       return;
     }
     this.failedSourceKeys.add(this.currentSourceKey);
+    this.onSourceFailed?.(this.currentSourceKey);
     const errorCode = this.video?.error?.code;
     const errorMap = { 1: "ABORTED", 2: "NETWORK", 3: "DECODE", 4: "SRC_NOT_SUPPORTED" };
     let errorLabel = errorMap[errorCode] || "";

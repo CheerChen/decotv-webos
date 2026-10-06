@@ -10,9 +10,9 @@ import {
   matchesYear,
   inferSearchType,
   runPreferEngine,
-  savePreferCache,
-  getPreferCache,
-  clearPreferCache,
+  startPreferSession,
+  getPreferSession,
+  clearPreferSession,
 } from "../js/core/network/preferEngine.js";
 
 const source = (name, episodes = ["a"]) => ({
@@ -154,16 +154,42 @@ describe("prefer title/year ladder", () => {
   });
 });
 
-describe("prefer cache", () => {
-  test("stores and restores probe entries by title and year", () => {
-    clearPreferCache();
-    const sources = [source("s1", ["a", "b"] )];
-    const probeResults = new Map([["s1-s1", { status: "ok" }]]);
-    savePreferCache({ title: "测试剧集", year: "2024", sources, probeResults, currentSourceKey: "s1-s1" });
-    const cached = getPreferCache("测试剧集", "2024");
-    assert.equal(cached.currentSourceKey, "s1-s1");
-    assert.deepEqual(cached.probeResults, [["s1-s1", { status: "ok" }]]);
-    assert.equal(getPreferCache("其他", "2024"), null);
+describe("prefer session", () => {
+  test("one live session per work, found again by title and year once it has sources", () => {
+    clearPreferSession();
+    const session = startPreferSession("测试剧集", "2024");
+    // No sources yet: nothing to restore.
+    assert.equal(getPreferSession("测试剧集", "2024"), null);
+    session.sources = [source("s1", ["a", "b"])];
+    session.probeResults.set("s1-s1", { status: "ok" });
+    session.currentSourceKey = "s1-s1";
+    session.failedSourceKeys.add("s1-s1");
+    // The same objects come back — no copies.
+    assert.equal(getPreferSession("测试剧集", "2024"), session);
+    assert.equal(getPreferSession("其他", "2024"), null);
+    // A fresh visit replaces it.
+    const next = startPreferSession("测试剧集", "2024");
+    assert.notEqual(next, session);
+    assert.equal(next.probeResults.size, 0);
+    assert.equal(next.failedSourceKeys.size, 0);
+  });
+
+  test("the engine writes probe results into the caller's Map in place", async () => {
+    const shared = new Map();
+    const seenMidRun = [];
+    const result = await runPreferEngine({
+      title: "测试剧集",
+      year: "2024",
+      existingProbeResults: shared,
+      concurrency: 1,
+      searchVideos: async () => ({ results: [source("s1"), source("s2")] }),
+      probePlayback: async () => ({ status: "ok", playable: true, startupTimeMs: 100 }),
+      // A reader holding the Map (the player) sees each result as it lands.
+      onProgress: () => seenMidRun.push(shared.size),
+    });
+    assert.equal(result.probeResults, shared);
+    assert.equal(shared.size, 2);
+    assert.deepEqual(seenMidRun, [1, 2]);
   });
 });
 
@@ -203,5 +229,76 @@ describe("prefer probing", () => {
     });
     assert.equal(result.best.source, "s1");
     assert.equal(result.probeResults.get("s1-s1").status, "failed");
+  });
+});
+
+describe("prefer round width and deadlines", () => {
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise((r) => { resolve = r; });
+    return { promise, resolve };
+  };
+
+  test("a narrowed round keeps going on fewer workers until every source is probed", async () => {
+    const sources = Array.from({ length: 12 }, (_, i) => source(`s${i}`));
+    let width = 8;
+    let started = 0;
+    let lateInFlight = 0; // probes started after the round narrowed
+    let latePeak = 0;
+    const result = await runPreferEngine({
+      title: "测试剧集",
+      year: "2024",
+      searchVideos: async () => ({ results: sources }),
+      concurrency: () => width,
+      probePlayback: async () => {
+        started += 1;
+        const late = width === 2;
+        if (late) latePeak = Math.max(latePeak, ++lateInFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        if (late) lateInFlight -= 1;
+        return { status: "ok", playable: true, startupTimeMs: 100 };
+      },
+      // Playback starts after the first result: the round narrows to 2.
+      // Probes already in flight finish; only 2 workers take new sources.
+      onProgress: () => { width = 2; },
+    });
+    assert.equal(started, 12);
+    assert.equal(result.probeResults.size, 12);
+    assert.equal(latePeak, 2);
+  });
+
+  test("a slow round that keeps progressing is not cut by the idle abort", async () => {
+    const sources = Array.from({ length: 6 }, (_, i) => source(`s${i}`));
+    const result = await runPreferEngine({
+      title: "测试剧集",
+      year: "2024",
+      searchVideos: async () => ({ results: sources }),
+      concurrency: 1,
+      idleAbortMs: 40,
+      // 6 x 20 ms = 120 ms total, three times the idle window, but a
+      // result lands every 20 ms.
+      probePlayback: async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        return { status: "ok", playable: true, startupTimeMs: 100 };
+      },
+    });
+    const results = [...result.probeResults.values()];
+    assert.equal(results.length, 6);
+    assert.ok(results.every((r) => r.status === "ok"));
+  });
+
+  test("a round with no progress for the idle window is aborted", async () => {
+    const hang = deferred();
+    const result = await runPreferEngine({
+      title: "测试剧集",
+      year: "2024",
+      searchVideos: async () => ({ results: [source("s1")] }),
+      idleAbortMs: 30,
+      probePlayback: (_url, _name, _timeout, signal) => {
+        signal.addEventListener("abort", () => hang.resolve());
+        return hang.promise.then(() => { throw new Error("aborted"); });
+      },
+    });
+    assert.equal(result.probeResults.get("s1-s1").failureKind, "timeout");
   });
 });
