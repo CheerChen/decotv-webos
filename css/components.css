@@ -571,6 +571,17 @@
   border-radius: 0 3px 3px 0;
 }
 
+/* Intro mark: the zone from the start to where every episode begins. */
+.player-progress-intro {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: rgba(250, 204, 21, 0.28);
+  border-right: 3px solid #facc15;
+  border-radius: 3px 0 0 3px;
+}
+
 .player-controls-row {
   display: flex;
   align-items: center;
@@ -628,7 +639,7 @@
   display: block;
 }
 
-/* Text controls (标记片尾/换源/列表) use a pill instead of a fixed circle. */
+/* Text controls (换源/列表) use a pill instead of a fixed circle. */
 .player-control-btn-text {
   width: auto;
   min-width: 88px;

@@ -42,7 +42,29 @@ http
     }
     try {
       const body = await readFile(filePath);
-      res.writeHead(200, { "content-type": MIME[extname(filePath).toLowerCase()] || "application/octet-stream" });
+      const type = MIME[extname(filePath).toLowerCase()] || "application/octet-stream";
+      // Byte ranges make the test videos seekable; without them Chromium
+      // reports seekable [0, 0] and every currentTime write snaps back to 0.
+      const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || "");
+      if (range && (range[1] || range[2])) {
+        const size = body.length;
+        const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+        const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+        if (start >= size || start > end) {
+          res.writeHead(416, { "content-range": `bytes */${size}` });
+          res.end();
+          return;
+        }
+        res.writeHead(206, {
+          "content-type": type,
+          "accept-ranges": "bytes",
+          "content-range": `bytes ${start}-${end}/${size}`,
+          "content-length": end - start + 1,
+        });
+        res.end(body.subarray(start, end + 1));
+        return;
+      }
+      res.writeHead(200, { "content-type": type, "accept-ranges": "bytes" });
       res.end(body);
     } catch {
       res.writeHead(404);

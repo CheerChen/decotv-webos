@@ -31,11 +31,13 @@ import {
   observeAdSkip
 } from "../../../core/playback/adSkipDetector.js";
 import {
-  outroMarkKey,
-  isValidOutroMark,
+  skipMarkKey,
+  getIntroEnd,
   getOutroFromEnd,
+  markButtonAction,
+  shouldSkipIntro,
   shouldTriggerOutro
-} from "../../../core/playback/outroMark.js";
+} from "../../../core/playback/skipMarks.js";
 
 export const PlayerScreen = {
   container: null,
@@ -66,6 +68,7 @@ export const PlayerScreen = {
   _stallArmed: false,     // only watch the clock once this load has actually played a frame
   _adSkip: null,          // pre-scan ranges + live fallback; see adSkipDetector.js
   _outroTriggered: false, // one-shot guard for the current episode's auto-advance
+  _introDecided: false,   // the current load's intro skip was decided (see _checkIntroMark)
 
   async mount(params = {}) {
     this.container = document.getElementById("player");
@@ -95,6 +98,7 @@ export const PlayerScreen = {
     this._stallArmed = false;
     this._adSkip = initialAdSkipState();
     this._outroTriggered = false;
+    this._introDecided = false;
 
     this.container.innerHTML = `
       <video id="videoPlayer" autoplay playsinline webkit-playsinline preload="auto"
@@ -112,6 +116,7 @@ export const PlayerScreen = {
           <div class="player-controls-bottom">
             <div class="player-progress-track" id="playerProgress">
               <div class="player-progress-fill" id="playerProgressFill"></div>
+              <div class="player-progress-intro" id="playerProgressIntro" style="display:none;"></div>
               <div class="player-progress-outro" id="playerProgressOutro" style="display:none;"></div>
               <div class="player-progress-thumb" id="playerProgressThumb"></div>
               <div class="player-progress-bubble" id="playerProgressBubble">0:00</div>
@@ -177,7 +182,7 @@ export const PlayerScreen = {
       getFilteredAdCount: () => this.playback?._filteredAdCount || 0,
       getIsProxied: () => this.playback?._proxiedForToken === this.playback?.playToken && !this.playback?._proxyFailed,
       getPaused: () => this.paused,
-      getOutroMark: () => this._getOutroMark(),
+      getSkipMarks: () => this._getSkipMarks(),
       getEpisodePanelVisible: () => this.episodePanelVisible,
       getSourcePanelVisible: () => this.sourcePanelVisible,
       onPanelsHidden: () => {
@@ -220,6 +225,8 @@ export const PlayerScreen = {
       // the previous timeline is still visible during a switch, or a tick in
       // that window would double-advance and skip episodes.
       this._outroTriggered = false;
+      // Same lifetime for the intro skip: once per load of an episode.
+      this._introDecided = false;
     });
     // Buffer underrun. Legitimate on a slow network, and also the first visible
     // symptom of the frozen-demuxer failure, so show the spinner either way —
@@ -228,9 +235,11 @@ export const PlayerScreen = {
     on("canplay", () => {
       this.container.querySelector("#playerLoading")?.classList.add("hidden");
       this._applyResume();
+      this._checkIntroMark(this.video);
     });
     on("loadedmetadata", () => {
       this._applyResume();
+      this._checkIntroMark(this.video);
       this._updateResolutionFromVideo();
     });
     on("playing", () => {
@@ -304,15 +313,40 @@ export const PlayerScreen = {
     }
     this._checkStall(v);
     this._checkAdSkip(v);
+    this._checkIntroMark(v);
     this._checkOutroMark(v);
-    this._updateOutroMarker(v);
+    this._updateSkipMarkers(v);
   },
 
-  // The outro mark is a fact about the timeline, so it is drawn on the
-  // timeline: a tick + tinted zone from the trigger point to the end.
-  // Kept in _tick because duration arrives late and changes per episode.
-  _updateOutroMarker(v) {
-    this.osd?.updateOutroMarker(v);
+  // Skip marks are facts about the timeline, so they are drawn on the
+  // timeline: a tinted zone from the start to the intro mark, and from the
+  // outro mark to the end. Kept in _tick because duration arrives late and
+  // changes per episode; the mark button follows the playhead the same way.
+  _updateSkipMarkers(v) {
+    this.osd?.updateSkipMarkers(v);
+    this.osd?.updateMarkButton();
+  },
+
+  // Once per load, after the resume seek has been applied (a resumed
+  // position past the intro stays put). Retried from every tick until the
+  // duration is known, so a mark that does not fit this episode is decided
+  // against its real length.
+  _checkIntroMark(v) {
+    if (this._introDecided || !v) return;
+    if (!this.playback?.resumeApplied) return;
+    const duration = Number(v.duration);
+    if (!Number.isFinite(duration) || duration <= 0) return;
+    this._introDecided = true;
+    const mark = this._getSkipMarks();
+    if (!shouldSkipIntro({
+      episodesLength: this.episodes.length,
+      currentTime: v.currentTime,
+      duration,
+      mark,
+      isExiting: this._isExiting,
+    })) return;
+    try { v.currentTime = Number(mark.introEnd); } catch (_) { return; }
+    showToast("已跳过片头");
   },
 
   _checkOutroMark(v) {
@@ -324,7 +358,7 @@ export const PlayerScreen = {
       ended: v.ended,
       currentTime: v.currentTime,
       duration: v.duration,
-      mark: this._getOutroMark(),
+      mark: this._getSkipMarks(),
       isExiting: this._isExiting,
       outroTriggered: this._outroTriggered,
     })) return;
@@ -452,47 +486,57 @@ export const PlayerScreen = {
   // recognized by `pressed` already being set. The preview position moves on a
   // rAF loop (8x → ~96x as the key is held) and only commits to the video on
   // keyup — one seek instead of a seek per repeat.
-  _outroMarkKey() {
+  _skipMarkKey() {
     const meta = this.recordMeta || {};
-    return outroMarkKey(
+    return skipMarkKey(
       meta.title || this.params?.title || "",
       meta.year || this.params?.year || ""
     );
   },
 
-  _getOutroMark() {
-    const key = this._outroMarkKey();
-    return key ? LocalLibrary.getOutroMark(key) : null;
+  _getSkipMarks() {
+    const key = this._skipMarkKey();
+    return key ? LocalLibrary.getSkipMarks(key) : null;
   },
 
-  _toggleOutroMark() {
+  // One button, chosen by the playhead (markButtonAction): an unmarked half
+  // is marked here; a marked half clears both marks. Moving a mark is
+  // clear, then mark again.
+  _toggleSkipMark() {
     if (this.episodes.length <= 1) return;
-    const key = this._outroMarkKey();
+    const key = this._skipMarkKey();
     const v = this.video;
     const duration = Number(v?.duration);
     const currentTime = Number(v?.currentTime);
     if (!key || !Number.isFinite(duration) || duration <= 0 || !Number.isFinite(currentTime)) {
-      showToast("片尾标记暂不可用");
+      showToast("标记暂不可用");
       return;
     }
 
-    const existing = LocalLibrary.getOutroMark(key);
-    if (isValidOutroMark(existing, duration)
-      && currentTime >= duration - Number(existing.fromEnd)) {
-      LocalLibrary.deleteOutroMark(key);
-      showToast("已取消片尾标记");
+    const { half, marked } = markButtonAction(LocalLibrary.getSkipMarks(key), currentTime, duration);
+    if (marked) {
+      LocalLibrary.clearSkipMarks(key);
+      showToast("已取消片头片尾标记");
+    } else if (half === "intro") {
+      const introEnd = getIntroEnd(currentTime, duration);
+      if (introEnd === null) {
+        showToast("标记位置需距片头至少 1 秒");
+        return;
+      }
+      LocalLibrary.setSkipMark(key, "introEnd", introEnd);
+      showToast("已标记片头，本剧各集从此处开始播放");
     } else {
       const fromEnd = getOutroFromEnd(currentTime, duration);
       if (fromEnd === null) {
         showToast("标记位置需距片尾至少 1 秒");
         return;
       }
-      LocalLibrary.saveOutroMark(key, { fromEnd, markedAt: Date.now() });
+      LocalLibrary.setSkipMark(key, "fromEnd", fromEnd);
       showToast("已标记片尾，本剧各集播到此处自动下一集");
     }
-    // No button re-render: the mark state is drawn on the progress bar, and
-    // rebuilding the buttons here is what used to silently drop focus.
-    this._updateOutroMarker(this.video);
+    // No button re-render: rebuilding the buttons is what used to silently
+    // drop focus. The marked button and the timeline update in place.
+    this._updateSkipMarkers(this.video);
     this.setControlsVisible(true);
   },
 
@@ -749,7 +793,7 @@ export const PlayerScreen = {
       case "prevEp": this._playPreviousEpisode(); break;
       case "nextEp": this._playNextEpisode(); break;
       case "restart": this._restartEpisode(); break;
-      case "markOutro": this._toggleOutroMark(); break;
+      case "skipMark": this._toggleSkipMark(); break;
       case "sourcePanel": this._toggleSourcePanel(); break;
       case "episodePanel": this._toggleEpisodePanel(); break;
     }

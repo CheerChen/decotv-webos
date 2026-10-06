@@ -127,7 +127,7 @@ echo '<your-tmdb-key>' > service/com.cheerchen.decotv.service/tmdb.key
 3. 账号模式服务器会要求登录，之后自动进入首页；`public` 模式可直接跳过
 4. 首页用方向键浏览，OK 进入详情
 5. 详情页自动测速并优选播放源；失败时自动或手动换源
-6. 播放器支持上一集 / 下一集、片尾标记与自动跳集
+6. 播放器支持上一集 / 下一集、片头 / 片尾标记（自动跳过片头、自动跳集）
 7. 收藏与播放记录在「收藏」页；本机信息与服务器信息在「设置」页右侧只读区
 
 ---
@@ -142,7 +142,7 @@ echo '<your-tmdb-key>' > service/com.cheerchen.decotv.service/tmdb.key
 | 播放 | 原生 `<video>` + UMS 硬件解码 |
 | 服务协议 | DecoTV / LunaTV 兼容 HTTP API |
 | 会话保持 | webOS JS 服务（Node 进程，独立于 WebView） |
-| 本地数据 | `localStorage`（服务器地址、登录凭据、收藏、播放记录与片尾标记） |
+| 本地数据 | `localStorage`（服务器地址、登录凭据、收藏、播放记录与片头 / 片尾标记） |
 | 打包 | `ares-package` → IPK |
 
 ---

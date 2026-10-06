@@ -14,7 +14,7 @@ import { LocalStore } from "./localStore.js";
 
 const FAVORITES_KEY = "decotv.local.favorites";
 const RECORDS_KEY = "decotv.local.playRecords";
-const OUTRO_MARKS_KEY = "decotv.local.outroMarks";
+const SKIP_MARKS_KEY = "decotv.local.outroMarks";
 const RECORDS_MIGRATED_KEY = "decotv.local.playRecords.migratedVersion";
 
 // Storage schema version — decoupled from app version. Bump this when the
@@ -116,38 +116,47 @@ export const LocalLibrary = {
     LocalStore.set(RECORDS_KEY, all || {});
   },
 
-  // ── Outro marks ──────────────────────────────────────────────────────────
-  // Shape: { "title|year": { fromEnd, markedAt } }
+  // ── Skip marks (intro + outro) ─────────────────────────────────────────────
+  // Shape: { "title|year": { introEnd?, fromEnd?, markedAt } } — see
+  // skipMarks.js. The storage key predates intro marks; outro-only records
+  // written before them read unchanged.
   // These are intentionally separate from play records: librarySync replaces
-  // the record map with the server's copy, while outro marks are local-only.
-  getOutroMarks() {
-    return LocalStore.get(OUTRO_MARKS_KEY, {}) || {};
+  // the record map with the server's copy, while skip marks are local-only.
+  getAllSkipMarks() {
+    return LocalStore.get(SKIP_MARKS_KEY, {}) || {};
   },
 
-  getOutroMark(key) {
+  getSkipMarks(key) {
     if (!key) return null;
-    return this.getOutroMarks()[key] || null;
+    return this.getAllSkipMarks()[key] || null;
   },
 
-  saveOutroMark(key, mark) {
-    if (!key) return { ok: false };
-    const fromEnd = Number(mark?.fromEnd);
-    if (!Number.isFinite(fromEnd)) return { ok: false };
-    const markedAt = Number(mark?.markedAt);
-    const all = this.getOutroMarks();
-    all[key] = {
-      fromEnd,
-      markedAt: Number.isFinite(markedAt) ? markedAt : now()
-    };
-    LocalStore.set(OUTRO_MARKS_KEY, all);
+  // Sets one mark (`introEnd` or `fromEnd`) of a title, or clears it with
+  // null; the other mark is kept. A title with neither mark is removed.
+  setSkipMark(key, field, value) {
+    if (!key || (field !== "introEnd" && field !== "fromEnd")) return { ok: false };
+    const all = this.getAllSkipMarks();
+    const entry = { ...(all[key] || {}) };
+    if (value === null) {
+      delete entry[field];
+    } else {
+      const seconds = Number(value);
+      if (!Number.isFinite(seconds)) return { ok: false };
+      entry[field] = seconds;
+      entry.markedAt = now();
+    }
+    if (Number.isFinite(entry.introEnd) || Number.isFinite(entry.fromEnd)) all[key] = entry;
+    else delete all[key];
+    LocalStore.set(SKIP_MARKS_KEY, all);
     return { ok: true };
   },
 
-  deleteOutroMark(key) {
-    if (!key) { LocalStore.remove(OUTRO_MARKS_KEY); return { ok: true }; }
-    const all = this.getOutroMarks();
+  // Both marks of a title at once.
+  clearSkipMarks(key) {
+    if (!key) return { ok: false };
+    const all = this.getAllSkipMarks();
     delete all[key];
-    LocalStore.set(OUTRO_MARKS_KEY, all);
+    LocalStore.set(SKIP_MARKS_KEY, all);
     return { ok: true };
   }
 };

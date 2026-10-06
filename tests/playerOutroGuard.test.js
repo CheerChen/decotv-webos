@@ -49,7 +49,7 @@ function mountScreen() {
       PlayerScreen.video.dispatch("loadstart");
     },
   };
-  PlayerScreen._getOutroMark = () => ({ fromEnd: 30 });
+  PlayerScreen._getSkipMarks = () => ({ fromEnd: 30 });
   PlayerScreen._bindVideo();
 }
 

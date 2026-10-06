@@ -30,27 +30,59 @@ const rec = (over = {}) => ({
   index: 1, play_time: 100, total_time: 7200, save_time: 1000, ...over,
 });
 
-describe("local outro marks", () => {
+describe("local skip marks", () => {
   beforeEach(() => store.clear());
 
   test("use the per-title key and stay separate from play-record replacement", () => {
     const key = LocalLibrary.recordKeyForTitle("某片2", "2023");
-    LocalLibrary.saveOutroMark(key, { fromEnd: 42, markedAt: 123 });
+    LocalLibrary.setSkipMark(key, "fromEnd", 42);
     LocalLibrary.replaceRecords({ "某片2|2023": rec() });
 
-    assert.deepEqual(LocalLibrary.getOutroMark(key), { fromEnd: 42, markedAt: 123 });
-    assert.deepEqual(LocalLibrary.getOutroMarks(), {
-      "某片2|2023": { fromEnd: 42, markedAt: 123 }
-    });
+    assert.equal(LocalLibrary.getSkipMarks(key).fromEnd, 42);
+    assert.deepEqual(Object.keys(LocalLibrary.getAllSkipMarks()), ["某片2|2023"]);
   });
 
-  test("delete only removes the selected title mark", () => {
-    LocalLibrary.saveOutroMark("a|2020", { fromEnd: 10, markedAt: 1 });
-    LocalLibrary.saveOutroMark("b|2021", { fromEnd: 20, markedAt: 2 });
-    LocalLibrary.deleteOutroMark("a|2020");
+  test("clearing one title's mark leaves other titles alone", () => {
+    LocalLibrary.setSkipMark("a|2020", "fromEnd", 10);
+    LocalLibrary.setSkipMark("b|2021", "fromEnd", 20);
+    LocalLibrary.setSkipMark("a|2020", "fromEnd", null);
 
-    assert.equal(LocalLibrary.getOutroMark("a|2020"), null);
-    assert.deepEqual(LocalLibrary.getOutroMark("b|2021"), { fromEnd: 20, markedAt: 2 });
+    assert.equal(LocalLibrary.getSkipMarks("a|2020"), null);
+    assert.equal(LocalLibrary.getSkipMarks("b|2021").fromEnd, 20);
+  });
+
+  test("intro and outro marks are set and cleared independently", () => {
+    LocalLibrary.setSkipMark("a|2020", "introEnd", 90);
+    LocalLibrary.setSkipMark("a|2020", "fromEnd", 120);
+    LocalLibrary.setSkipMark("a|2020", "introEnd", null);
+
+    const marks = LocalLibrary.getSkipMarks("a|2020");
+    assert.equal(marks.introEnd, undefined);
+    assert.equal(marks.fromEnd, 120);
+    // Both cleared: the title is gone.
+    LocalLibrary.setSkipMark("a|2020", "fromEnd", null);
+    assert.equal(LocalLibrary.getSkipMarks("a|2020"), null);
+  });
+
+  test("clearing a title removes both its marks and keeps other titles", () => {
+    LocalLibrary.setSkipMark("a|2020", "introEnd", 90);
+    LocalLibrary.setSkipMark("a|2020", "fromEnd", 120);
+    LocalLibrary.setSkipMark("b|2021", "fromEnd", 20);
+    LocalLibrary.clearSkipMarks("a|2020");
+
+    assert.equal(LocalLibrary.getSkipMarks("a|2020"), null);
+    assert.equal(LocalLibrary.getSkipMarks("b|2021").fromEnd, 20);
+  });
+
+  test("an outro-only record written before intro marks reads unchanged", () => {
+    store.set("decotv.local.outroMarks", JSON.stringify({ "a|2020": { fromEnd: 42, markedAt: 123 } }));
+    assert.deepEqual(LocalLibrary.getSkipMarks("a|2020"), { fromEnd: 42, markedAt: 123 });
+  });
+
+  test("bad input is refused", () => {
+    assert.equal(LocalLibrary.setSkipMark("", "fromEnd", 10).ok, false);
+    assert.equal(LocalLibrary.setSkipMark("a|2020", "other", 10).ok, false);
+    assert.equal(LocalLibrary.setSkipMark("a|2020", "fromEnd", "nope").ok, false);
   });
 });
 

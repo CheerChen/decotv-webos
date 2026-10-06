@@ -2,7 +2,7 @@
 
 import { ScreenUtils } from "../../navigation/screen.js";
 import { formatTime, escapeHtml } from "../../utils.js";
-import { outroMarkerPercent } from "../../../core/playback/outroMark.js";
+import { introMarkerPercent, markButtonAction, outroMarkerPercent } from "../../../core/playback/skipMarks.js";
 import { episodeLabel } from "../../../core/network/sourceRanking.js";
 
 const SCRUB_HOLD_MS = 350;
@@ -12,7 +12,17 @@ const ICONS = {
   prevEp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h2v14H5zM18 6l-9 6 9 6z"/></svg>',
   nextEp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l9 6-9 6zM17 5h2v14h-2z"/></svg>',
   restart: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>',
+  // Material "flag" / "outlined_flag", as atv uses: filled = this half is marked.
+  flag: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.4 6L14 4H5v17h2v-7h5.6l.4 2h7V6z"/></svg>',
+  flagOutlined: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 6l-1-2H5v17h2v-7h5l1 2h7V6h-6zm4 8h-4l-1-2H7V6h5l1 2h5v6z"/></svg>',
   shield: '<svg viewBox="0 0 24 24" aria-hidden="true" class="ad-shield-icon"><path d="M12 2L4 5v6c0 5.5 3.8 10.7 8 12 4.2-1.3 8-6.5 8-12V5l-8-3z" fill="currentColor"/><path d="M9.5 12.5l1.8 1.8 3.2-3.2" stroke="#1a1a2e" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
+
+// Spoken / tooltip text only: the button itself is the flag icon.
+const MARK_LABELS = {
+  intro: "标记片头",
+  outro: "标记片尾",
+  clear: "取消片头片尾标记",
 };
 
 export class PlayerOsd {
@@ -28,7 +38,7 @@ export class PlayerOsd {
     getFilteredAdCount,
     getIsProxied,
     getPaused,
-    getOutroMark,
+    getSkipMarks,
     getEpisodePanelVisible,
     getSourcePanelVisible,
     onPanelsHidden,
@@ -44,7 +54,7 @@ export class PlayerOsd {
     this.getFilteredAdCount = getFilteredAdCount;
     this.getIsProxied = getIsProxied;
     this.getPaused = getPaused;
-    this.getOutroMark = getOutroMark;
+    this.getSkipMarks = getSkipMarks;
     this.getEpisodePanelVisible = getEpisodePanelVisible;
     this.getSourcePanelVisible = getSourcePanelVisible;
     this.onPanelsHidden = onPanelsHidden;
@@ -67,18 +77,46 @@ export class PlayerOsd {
       { action: "restart", label: ICONS.restart },
       { action: "episodePanel", label: "列表", text: true, active: this.getEpisodePanelVisible(), disabled: episodes.length <= 1 },
       { action: "sourcePanel", label: "换源", text: true, active: this.getSourcePanelVisible(), disabled: allSources.length <= 1 },
-      { action: "markOutro", label: "标记片尾", text: true, disabled: episodes.length <= 1 },
     ];
+    // No episodes to skip between: the mark button is not shown at all.
+    if (episodes.length > 1) defs.push({ action: "skipMark", ...this._markButtonDef() });
     const focusedCtrl = wrap.querySelector(".player-control-btn.focused")?.dataset?.ctrl || null;
     wrap.innerHTML = defs.map((d) => `
       <button class="player-control-btn${d.text ? " player-control-btn-text" : ""}${d.active ? " active" : ""}${d.disabled ? "" : " focusable"}"
-        data-ctrl="${d.action}" ${d.disabled ? "disabled" : ""}>${d.label}</button>
+        data-ctrl="${d.action}"${d.state ? ` data-state="${d.state}" aria-label="${d.ariaLabel}"` : ""} ${d.disabled ? "disabled" : ""}>${d.label}</button>
     `).join("");
     if (this.focusZone === "buttons") {
       const target = wrap.querySelector(`.player-control-btn.focusable[data-ctrl="${focusedCtrl}"]`)
         || wrap.querySelector('.player-control-btn[data-ctrl="playPause"]');
       if (target) ScreenUtils.setFocus(target, wrap);
     }
+  }
+
+  // Icon only: an outlined flag marks this half of the timeline; a filled
+  // flag (+ active tint) means this half is marked and pressing clears both.
+  _markButtonDef() {
+    const video = this.getVideo();
+    const { half, marked } = markButtonAction(this.getSkipMarks(), video?.currentTime, video?.duration);
+    return {
+      state: `${half}-${marked ? "marked" : "unmarked"}`,
+      active: marked,
+      ariaLabel: marked ? MARK_LABELS.clear : MARK_LABELS[half],
+      label: marked ? ICONS.flag : ICONS.flagOutlined,
+    };
+  }
+
+  // Called every tick and after a mark changes: crossing the middle of the
+  // timeline, or marking/clearing, rewrites the button in place. The button
+  // element itself stays, so a focused button keeps its focus.
+  updateMarkButton() {
+    const btn = this.container.querySelector('.player-control-btn[data-ctrl="skipMark"]');
+    if (!btn) return;
+    const def = this._markButtonDef();
+    if (btn.dataset.state === def.state) return;
+    btn.dataset.state = def.state;
+    btn.classList.toggle("active", def.active);
+    btn.setAttribute("aria-label", def.ariaLabel);
+    btn.innerHTML = def.label;
   }
 
   updateMeta() {
@@ -136,19 +174,29 @@ export class PlayerOsd {
     }
   }
 
-  updateOutroMarker(video) {
-    const el = this.container.querySelector("#playerProgressOutro");
-    if (!el) return;
+  updateSkipMarkers(video) {
     const episodes = this.getEpisodes() || [];
-    const pct = episodes.length <= 1
-      ? null
-      : outroMarkerPercent(this.getOutroMark(), video?.duration);
-    if (pct === null) {
-      el.style.display = "none";
-      return;
+    const marks = episodes.length <= 1 ? null : this.getSkipMarks();
+    const outro = this.container.querySelector("#playerProgressOutro");
+    if (outro) {
+      const pct = outroMarkerPercent(marks, video?.duration);
+      if (pct === null) {
+        outro.style.display = "none";
+      } else {
+        outro.style.left = `${pct}%`;
+        outro.style.display = "block";
+      }
     }
-    el.style.left = `${pct}%`;
-    el.style.display = "block";
+    const intro = this.container.querySelector("#playerProgressIntro");
+    if (intro) {
+      const pct = introMarkerPercent(marks, video?.duration);
+      if (pct === null) {
+        intro.style.display = "none";
+      } else {
+        intro.style.width = `${pct}%`;
+        intro.style.display = "block";
+      }
+    }
   }
 
   setVisible(visible) {

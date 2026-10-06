@@ -128,7 +128,7 @@ echo '<your-tmdb-key>' > service/com.cheerchen.decotv.service/tmdb.key
 3. An account-mode server asks for a sign-in, then opens the home screen; `public` mode can be used without signing in
 4. Browse the home wall with the D-pad; OK opens detail
 5. Detail probes sources and starts the best one; switch sources on failure or via the panel
-6. The player supports previous / next episode, outro markers and automatic episode advance
+6. The player supports previous / next episode, intro / outro marks (intro skip and automatic episode advance)
 7. Favorites and play history live under Library; client and server info are read-only on the right of Settings
 
 ---
@@ -143,7 +143,7 @@ echo '<your-tmdb-key>' > service/com.cheerchen.decotv.service/tmdb.key
 | Playback | Native `<video>` + UMS hardware decode |
 | API | DecoTV / LunaTV-compatible HTTP |
 | Session | webOS JS service (Node process, outside the webview) |
-| Local data | `localStorage` (server URL, credentials, favorites, play history and outro marks) |
+| Local data | `localStorage` (server URL, credentials, favorites, play history and intro / outro marks) |
 | Package | `ares-package` → IPK |
 
 ---
