@@ -8,7 +8,7 @@
 
 <p align="center">
   <strong>Native <a href="https://github.com/Decohererk/DecoTV">DecoTV</a> client for LG webOS TVs</strong><br />
-  Douban / TMDB catalogs · multi-source probe ranking · full D-pad navigation · hardware decode
+  Douban / TMDB / Bangumi catalogs · multi-source probe ranking · full D-pad navigation · hardware decode
 </p>
 
 <p align="center">
@@ -45,7 +45,7 @@
 
 A **purpose-built webOS TV client** for [DecoTV](https://github.com/Decohererk/DecoTV) — not a browser wrapper.
 
-- Talks to a self-hosted DecoTV server: multi-source search, probe ranking, playback (the Douban catalog is fetched directly from m.douban.com, not through the server); the catalog can be switched to TMDB in settings (also fetched directly)
+- Talks to a self-hosted DecoTV server: multi-source search, probe ranking, playback (the Douban catalog is fetched directly from m.douban.com, not through the server); the catalog can be switched to TMDB in settings (also fetched directly); the anime pages always use the Bangumi catalog (fetched directly), whatever the setting
 - TV UI with remote D-pad focus navigation
 - Native `<video>` **hardware HLS decode** on webOS (no HLS.js)
 - **No root required** — Developer Mode or [Homebrew Channel](https://github.com/webosbrew/webos-homebrew-channel)
@@ -61,11 +61,14 @@ See [Releases](https://github.com/CheerChen/decotv-webos/releases) for packages 
 | Feature | Notes |
 | --- | --- |
 | Home wall | Continue-watching on top; hot movie, series, anime and variety rows |
-| Catalog browsing | Douban hot & curated tabs (movies, series, anime, variety, documentary) with region / genre / year filters; switch to the TMDB catalog in settings, with automatic fallback to Douban |
+| Catalog browsing | Movies, series, variety and documentary come from Douban hot & curated tabs with region / genre / year filters; switch to the TMDB catalog in settings, with automatic fallback to Douban. Anime comes from Bangumi trending and subject search, with region / year / sort filters. Cards show the rating and its vote count |
 | Auto page-load | Large category sets keep loading as focus approaches the end of the grid, up to 100 items per category — no manual paging |
+| Work details | Rating (with its source and vote count), genres, summary, directors and cast come from the work's own catalog provider (Douban / TMDB / Bangumi); nothing is borrowed from another provider |
+| Landscape hero | Optional: a landscape still fills the screen behind the details page (Settings → Details hero) |
 | Multi-source probe ranking | All sources are measured concurrently, ranked by quality, throughput and startup latency; probing continues in the background and playback can start at any time with the best source so far |
-| Detail page plays directly | Selecting an episode or a source starts playback; the episode grid sits above the (often long) source list, with the last-watched episode highlighted |
-| Failover / manual switch | On failure, the best measured remaining source takes over from where playback stopped; in-player source side panel remains available |
+| Detail page plays directly | Selecting an episode or a source starts playback; the episode grid sits above the (often long) source list, with the last-watched episode highlighted. TMDB series get episode cards with stills and titles, Bangumi works get episode title cards |
+| Failover / manual switch | On failure, the best measured remaining source takes over from where playback stopped; in-player source side panel remains available. A source switched to in the player stays picked back on the details page, and a source that failed to play is marked there |
+| Intro / outro marks | One button marks the intro or the outro (by whether the playhead is in the first or second half); pressed again it clears both. Every episode then skips the intro and advances at the outro |
 | Progress memory | Keyed by title + year (survives source switch); the play button announces the episode it will resume |
 | Library | Favorites & play history sync with the server once signed in; public mode or no session keeps them on the TV |
 | Chinese / English UI | Follows the TV language (anything non-Chinese gets English), switchable in Settings; server-supplied content such as titles and genres stays Chinese |
@@ -107,16 +110,6 @@ ssh root@TV 'opkg --add-dest developer:/media/developer install -d developer /tm
           cp -a /media/developer/usr/palm/applications/com.cheerchen.decotv \
                 /media/developer/apps/usr/palm/applications/'
 ssh root@TV 'sync; reboot'   # first install needs reboot for sam registration
-```
-
-Or package locally:
-
-```bash
-# The TMDB catalog needs an API key (v3 key or v4 Read Access Token); it is
-# bundled into the IPK but kept out of git:
-echo '<your-tmdb-key>' > service/com.cheerchen.decotv.service/tmdb.key
-./scripts/package.sh
-# → com.cheerchen.decotv_<version>_all.ipk
 ```
 
 ---

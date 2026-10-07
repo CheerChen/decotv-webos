@@ -23,7 +23,7 @@ js/core/network/sourceRanking.js
 js/core/network/tmdbClient.js
 js/core/playback/adSkipDetector.js
 js/core/playback/adSkipScanner.js
-js/core/playback/outroMark.js
+js/core/playback/skipMarks.js
 js/core/playback/stallDetector.js
 js/core/playback/streamResolution.js
 js/core/playback/tsResolution.js

@@ -8,7 +8,7 @@
 
 <p align="center">
   <strong>面向 LG webOS 电视的 <a href="https://github.com/Decohererk/DecoTV">DecoTV</a> 原生客户端</strong><br />
-  豆瓣 / TMDB 目录 · 多源测速优选 · 遥控器全导航 · 硬件解码播放
+  豆瓣 / TMDB / Bangumi 目录 · 多源测速优选 · 遥控器全导航 · 硬件解码播放
 </p>
 
 <p align="center">
@@ -45,7 +45,7 @@
 
 本仓库是 **[DecoTV](https://github.com/Decohererk/DecoTV)** 在 **LG webOS 电视**上的专用客户端（非浏览器套壳）。
 
-- 对接已部署的 DecoTV 服务端：聚合搜索、多源测速与播放（豆瓣目录由客户端直连 m.douban.com，不经过服务端）；可在设置中切换为 TMDB 目录（同样由客户端直连）
+- 对接已部署的 DecoTV 服务端：聚合搜索、多源测速与播放（豆瓣目录由客户端直连 m.douban.com，不经过服务端）；可在设置中切换为 TMDB 目录（同样由客户端直连）；动漫页固定使用 Bangumi 目录（客户端直连），不随设置切换
 - 为 TV UI 与遥控器 D-pad 设计焦点导航
 - 使用 webOS 原生 `<video>` **硬件解码 HLS**，不依赖 HLS.js
 - **不需要 root**；开发者模式或 [Homebrew Channel](https://github.com/webosbrew/webos-homebrew-channel) 即可安装
@@ -61,11 +61,14 @@
 | 能力 | 说明 |
 | --- | --- |
 | 首页海报墙 | 继续观看置顶；热门电影、剧集、动漫、综艺分行展示 |
-| 目录浏览 | 豆瓣热门与精选（电影、剧集、动漫、综艺、纪录片），可按地区 / 类型 / 年份筛选；设置中可切换为 TMDB 目录，TMDB 不可用时自动回退豆瓣 |
+| 目录浏览 | 电影、剧集、综艺、纪录片使用豆瓣热门与精选，可按地区 / 类型 / 年份筛选；设置中可切换为 TMDB 目录，TMDB 不可用时自动回退豆瓣。动漫使用 Bangumi 热度榜与条目检索，可按地区 / 年份 / 排序筛选。卡片显示评分与评分人数 |
 | 分类自动下加载 | 大结果集浏览到列表末尾时自动追加下一页，单分类最多 100 个条目，无需手动翻页 |
+| 作品详情 | 评分（附来源与评分人数）、类型、简介、导演与主演来自作品所属的目录平台（豆瓣 / TMDB / Bangumi），不混用其他平台的数据 |
+| 详情页大图 | 可选：以横版剧照铺满全屏作为详情页背景（设置 → 详情页大图） |
 | 多源测速优选 | 并发检测全部播放源，按画质、吞吐与启动时延排序；测速在后台继续，期间可随时开始播放 |
-| 详情页直达播放 | 点击剧集或播放源即开始播放；剧集列表在播放源上方，上次观看的剧集高亮标记 |
-| 播放失败换源 | 当前源失败后选择剩余源中实测最优者，并从中断位置继续；播放中可打开换源侧栏手动切换 |
+| 详情页直达播放 | 点击剧集或播放源即开始播放；剧集列表在播放源上方，上次观看的剧集高亮标记。TMDB 剧集显示分集剧照与标题卡片，Bangumi 作品显示分集标题卡片 |
+| 播放失败换源 | 当前源失败后选择剩余源中实测最优者，并从中断位置继续；播放中可打开换源侧栏手动切换。播放器里换过的源在返回详情页后保持选中，播放失败的源标为「播放失败」 |
+| 片头 / 片尾标记 | 一个按钮标记片头与片尾（按播放进度在前半段或后半段决定），再按一次同时清除；之后每集自动跳过片头、到片尾自动下一集 |
 | 进度记忆 | 按「标题 + 年份」记进度，换源不丢断点；播放按钮显示继续播放集数 |
 | 收藏与播放记录 | 登录后与服务端双向同步；`public` 模式或未登录时存在电视本地 |
 | 中英界面 | 跟随电视语言（非中文一律英文），可在设置中手动切换；片源与分类等服务端内容仍为中文 |
@@ -107,15 +110,6 @@ ssh root@TV 'opkg --add-dest developer:/media/developer install -d developer /tm
           cp -a /media/developer/usr/palm/applications/com.cheerchen.decotv \
                 /media/developer/apps/usr/palm/applications/'
 ssh root@TV 'sync; reboot'   # 首次安装需重启，sam 才会注册应用
-```
-
-也可本地打包：
-
-```bash
-# TMDB 目录需要 API Key（v3 key 或 v4 Read Access Token），打包进 IPK、不进 git：
-echo '<your-tmdb-key>' > service/com.cheerchen.decotv.service/tmdb.key
-./scripts/package.sh
-# → com.cheerchen.decotv_<version>_all.ipk
 ```
 
 ---
@@ -166,7 +160,7 @@ uv run tvkit/scripts/cdp_reload.py --target decotv
 
 应用 ID：`com.cheerchen.decotv`。
 
-调试脚本位于 [webos-tv-kit](https://github.com/CheerChen/webos-tv-kit)（`tvkit/scripts/`）：
+调试脚本位于 [webos-tv-kit](https://github.com/CheerChen/webos-tv-kit)（`tvkit/scripts/`）。
 
 ---
 
