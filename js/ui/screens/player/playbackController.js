@@ -49,6 +49,7 @@ export class PlaybackController {
     this.currentSourceKey = currentSourceKey;
     this.resumeTime = Math.max(0, Number(resumeTime || 0));
     this.resumeApplied = false;
+    this._loadPending = false;     // playIndex has not handed the new URL to the element yet
     this.recordMeta = recordMeta;
     this.lastSaveAt = 0;
     this.isExiting = false;
@@ -82,6 +83,10 @@ export class PlaybackController {
   async playIndex(idx) {
     if (idx < 0 || idx >= this.episodes.length) return;
     const token = ++this.playToken;
+    // Until the new URL reaches the element (resolve + proxy port are async,
+    // seconds on a TV) it still holds the OLD stream with a valid duration:
+    // a resume applied now would land on the old stream and be spent.
+    this._loadPending = true;
     const switching = this.resumeApplied || idx !== this.index;
     if (switching) {
       this.saveRecord(true);
@@ -156,6 +161,7 @@ export class PlaybackController {
 
     this.video.src = effectiveUrl;
     this.video.load();
+    this._loadPending = false;
     const playPromise = this.video.play();
     if (playPromise && typeof playPromise.catch === "function") {
       playPromise.catch(() => { /* autoplay restriction — user must press play */ });
@@ -357,7 +363,7 @@ export class PlaybackController {
   }
 
   applyResume() {
-    if (this.resumeApplied || !this.video) return;
+    if (this.resumeApplied || this._loadPending || !this.video) return;
     if (this.resumeTime <= 0) {
       this.resumeApplied = true;
       return;
@@ -428,11 +434,7 @@ export class PlaybackController {
     if (next) {
       const key = getSourceProbeKey(next);
       this.toast(`${errorLabel} · ${sourceName} → 换源`);
-      // After a failed load() the media element's currentTime is already 0,
-      // so a chain of failovers loses the original position. Fall back to the
-      // resumeTime set by the previous switchToSourceKey in the chain.
-      const resumeAt = this.video?.currentTime || this.resumeTime || 0;
-      this.switchToSourceKey(key, { resumeAt });
+      this.switchToSourceKey(key);
     } else {
       this.toast(`全部源不可用 · ${errorLabel}`);
       this.stopAndExit();
@@ -454,7 +456,7 @@ export class PlaybackController {
     // already — fall back to the last known resume position. The proxied
     // timeline is compressed vs the direct one (ads removed), so this lands
     // slightly EARLIER on the direct timeline — the safe direction.
-    const resumeAt = this.video?.currentTime || this.resumeTime || 0;
+    const resumeAt = this.playheadForSwitch();
     this.resumeTime = resumeAt;
     this.resumeApplied = false;
     console.warn("[DecoTV] proxy playback failed, retrying direct", { resumeAt });
@@ -477,6 +479,21 @@ export class PlaybackController {
     }
   }
 
+  // Where the viewer is on the current episode, for a reload elsewhere
+  // (another source, or the direct URL). Until this load's resume seek has
+  // been applied the element's clock is not the viewer's: a failed load()
+  // has already reset it to 0, and a load still starting sits at 0 — the
+  // pending resumeTime is the position then (this is what carries the
+  // position through a chain of failovers).
+  playheadForSwitch() {
+    const current = Number(this.video?.currentTime) || 0;
+    if (this.resumeApplied) return current;
+    return Math.max(current, Number(this.resumeTime) || 0);
+  }
+
+  // Same episode, same position on the new source: a manual switch from the
+  // source panel and a failover both resume where the viewer was.
+  // `opts.resumeAt` overrides the position.
   switchToSourceKey(key, opts = {}) {
     const source = this.allSources.find((item) => getSourceProbeKey(item) === key);
     if (!source) return;
@@ -489,6 +506,7 @@ export class PlaybackController {
       this.toast("该源无剧集");
       return;
     }
+    const resumeAt = opts.resumeAt ?? this.playheadForSwitch();
     this.saveRecord(true);
     this.episodes = newEpisodes;
     this.currentSourceKey = key;
@@ -510,7 +528,7 @@ export class PlaybackController {
       };
     }
     this.index = Math.min(this.index, newEpisodes.length - 1);
-    this.resumeTime = Math.max(0, Number(opts.resumeAt || 0));
+    this.resumeTime = Math.max(0, Number(resumeAt) || 0);
     this.resumeApplied = false;
     this.onSourcePanelClose?.();
     this._notifyState();

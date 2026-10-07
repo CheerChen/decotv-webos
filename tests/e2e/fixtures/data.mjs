@@ -40,7 +40,24 @@ const SHOW_B = [
   },
 ];
 
-export const CATALOG = [...SHOW_A, ...SHOW_B];
+// ---- Title 3: 长剧 — 60 s episodes, so a resume (which needs > 10 s left)
+// can land. l2 is opaque and its resolve is slow, like resolve + proxy port
+// on a TV: the old stream stays loaded across several player ticks.
+const LONG = "http://127.0.0.1:4173/tests/e2e/assets/long.webm";
+const SHOW_C = [
+  {
+    id: "1101", source: "l1", source_name: "长源一", title: "长剧", year: "2025",
+    type_name: "电视剧", desc: "e2e mock", poster: "https://poster.example/c.jpg",
+    episodes: [LONG, LONG],
+  },
+  {
+    id: "1102", source: "l2", source_name: "长源二", title: "长剧", year: "2025",
+    type_name: "电视剧", desc: "e2e mock", poster: "https://poster.example/c.jpg",
+    episodes: [OPAQUE("l2", 1), OPAQUE("l2", 2)],
+  },
+];
+
+export const CATALOG = [...SHOW_A, ...SHOW_B, ...SHOW_C];
 
 // Probe results keyed by `source` query param. Shapes mirror /api/playback/probe.
 // s1/f1: verified 1080p -> hits PREFER_QUALITY_SHORTCUT_RANK, autoplay fires
@@ -51,9 +68,13 @@ export const PROBES = {
   s3: { hasError: true, status: "failed", failureKind: "network", message: "mock network failure" },
   f1: { status: "ok", playable: true, quality: "1080p", speedKBps: 6000, pingTime: 15, startupTimeMs: 200, mediaType: "media" },
   f2: { status: "ok", playable: true, quality: "720p", speedKBps: 2500, pingTime: 50, startupTimeMs: 600, mediaType: "media" },
+  l1: { status: "ok", playable: true, quality: "1080p", speedKBps: 5000, pingTime: 20, startupTimeMs: 300, mediaType: "media" },
+  l2: { status: "ok", playable: true, quality: "720p", speedKBps: 3000, pingTime: 40, startupTimeMs: 500, mediaType: "media" },
 };
 
 export const RESOLVE_FAILS = new Set(["f1"]);
+// Sources whose resolve answers late, with what: { delayMs, playbackUrl }.
+export const RESOLVE_SLOW = { l2: { delayMs: 1500, playbackUrl: LONG } };
 
 // rexxar subject for the first home card: what the details page shows from
 // the work's own provider.

@@ -608,7 +608,7 @@ export const PlayerScreen = {
     const panel = createSidePanel({
       id: "playerSourcePanel",
       title: "播放源",
-      hint: "▲▼ 选择 · OK 切换并重播 · 返回 关闭",
+      hint: "▲▼ 选择 · OK 切换（接着看） · 返回 关闭",
       listId: "playerSourceList",
       items,
     });

@@ -1,5 +1,5 @@
 // tests/e2e/helpers/harness.mjs — boot the app in Chromium with a fake backend.
-import { CATALOG, PROBES, RESOLVE_FAILS, HOME_MOVIE_CARDS, SERVER_CONFIG, DOUBAN_SUBJECT_1001, TMDB_TV_777 } from "../fixtures/data.mjs";
+import { CATALOG, PROBES, RESOLVE_FAILS, RESOLVE_SLOW, HOME_MOVIE_CARDS, SERVER_CONFIG, DOUBAN_SUBJECT_1001, TMDB_TV_777 } from "../fixtures/data.mjs";
 
 const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
@@ -150,7 +150,7 @@ function json(route, body, status = 200) {
   return route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 }
 
-function handleApi(route, state) {
+async function handleApi(route, state) {
   const u = new URL(route.request().url());
   const p = u.pathname;
 
@@ -185,6 +185,11 @@ function handleApi(route, state) {
     const source = u.searchParams.get("source") || "";
     state.resolveCalls.push(source);
     if (RESOLVE_FAILS.has(source)) return json(route, { error: "mock resolve failure" }, 500);
+    const slow = RESOLVE_SLOW[source];
+    if (slow) {
+      await new Promise((r) => setTimeout(r, slow.delayMs));
+      return json(route, { playbackUrl: slow.playbackUrl });
+    }
     return json(route, { playbackUrl: "http://127.0.0.1:4173/tests/e2e/assets/ep1.webm" });
   }
   if (p === "/api/detail") {
