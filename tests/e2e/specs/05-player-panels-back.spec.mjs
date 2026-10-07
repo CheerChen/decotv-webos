@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { bootToHome } from "../helpers/harness.mjs";
 import { press, pressBack, pressUntilFocused } from "../helpers/keys.mjs";
 
-test("player: source panel opens from controls; Back closes panel then exits", async ({ page }) => {
+test("player: source panel opens from controls; Back closes panel, then the bar, then exits", async ({ page }) => {
   await bootToHome(page);
 
   await page.evaluate(() => window.__router.navigate("detail", { title: "测试剧集", year: "2024", poster: "", autoPlay: true }));
@@ -24,7 +24,13 @@ test("player: source panel opens from controls; Back closes panel then exits", a
   await expect(page.locator("#playerSourcePanel")).toHaveCount(0);
   expect(await page.evaluate(() => window.__router.current)).toBe("player");
 
-  // Second Back exits to detail.
+  // Second Back puts the bar away — still on the player.
+  await expect(page.locator("#playerControls")).not.toHaveClass(/hidden/);
+  await pressBack(page);
+  await expect(page.locator("#playerControls")).toHaveClass(/hidden/);
+  expect(await page.evaluate(() => window.__router.current)).toBe("player");
+
+  // Third Back, with nothing on screen, exits to detail.
   await pressBack(page);
   await page.waitForFunction(() => window.__router?.current === "detail");
 });

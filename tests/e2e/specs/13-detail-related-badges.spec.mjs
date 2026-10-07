@@ -18,6 +18,9 @@ const SERIES = [hit("系列测试 第五季", 9005), hit("系列测试第五季"
 async function playThenBack(page) {
   await page.waitForFunction(() => window.__router?.current === "player", null, { timeout: 15000 });
   await page.waitForFunction(() => (document.getElementById("videoPlayer")?.currentTime || 0) > 0.3, null, { timeout: 10000 });
+  // The first Back puts the bar away, the second leaves.
+  await pressBack(page);
+  await expect(page.locator("#playerControls")).toHaveClass(/hidden/);
   await pressBack(page);
   await page.waitForFunction(() => window.__router?.current === "detail");
 }

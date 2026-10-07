@@ -11,6 +11,9 @@ const ICONS = {
   pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>',
   prevEp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h2v14H5zM18 6l-9 6 9 6z"/></svg>',
   nextEp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l9 6-9 6zM17 5h2v14h-2z"/></svg>',
+  // Material "playlist_play" (episode list) / "layers" (sources, as atv uses).
+  episodes: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10h12v2H4zm0-4h12v2H4zm0 8h8v2H4zm10 0v6l5-3z"/></svg>',
+  sources: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11.99 18.54l-7.37-5.73L3 14.07l9 7 9-7-1.63-1.27-7.38 5.74zM12 16l7.36-5.73L21 9l-9-7-9 7 1.63 1.27L12 16z"/></svg>',
   restart: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>',
   // Material "flag" / "outlined_flag", as atv uses: filled = this half is marked.
   flag: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.4 6L14 4H5v17h2v-7h5.6l.4 2h7V6z"/></svg>',
@@ -75,15 +78,18 @@ export class PlayerOsd {
       { action: "playPause", label: this.getPaused() ? ICONS.play : ICONS.pause },
       { action: "nextEp", label: ICONS.nextEp, disabled: episodes.length <= 1 || index >= episodes.length - 1 },
       { action: "restart", label: ICONS.restart },
-      { action: "episodePanel", label: "列表", text: true, active: this.getEpisodePanelVisible(), disabled: episodes.length <= 1 },
-      { action: "sourcePanel", label: "换源", text: true, active: this.getSourcePanelVisible(), disabled: allSources.length <= 1 },
     ];
-    // No episodes to skip between: the mark button is not shown at all.
+    // A single video has no list to open and no episodes to skip between:
+    // those buttons are not shown at all.
+    if (episodes.length > 1) {
+      defs.push({ action: "episodePanel", label: ICONS.episodes, ariaLabel: "剧集列表", active: this.getEpisodePanelVisible() });
+    }
+    defs.push({ action: "sourcePanel", label: ICONS.sources, ariaLabel: "换源", active: this.getSourcePanelVisible(), disabled: allSources.length <= 1 });
     if (episodes.length > 1) defs.push({ action: "skipMark", ...this._markButtonDef() });
     const focusedCtrl = wrap.querySelector(".player-control-btn.focused")?.dataset?.ctrl || null;
     wrap.innerHTML = defs.map((d) => `
-      <button class="player-control-btn${d.text ? " player-control-btn-text" : ""}${d.active ? " active" : ""}${d.disabled ? "" : " focusable"}"
-        data-ctrl="${d.action}"${d.state ? ` data-state="${d.state}" aria-label="${d.ariaLabel}"` : ""} ${d.disabled ? "disabled" : ""}>${d.label}</button>
+      <button class="player-control-btn${d.active ? " active" : ""}${d.disabled ? "" : " focusable"}"
+        data-ctrl="${d.action}"${d.state ? ` data-state="${d.state}"` : ""}${d.ariaLabel ? ` aria-label="${d.ariaLabel}"` : ""} ${d.disabled ? "disabled" : ""}>${d.label}</button>
     `).join("");
     if (this.focusZone === "buttons") {
       const target = wrap.querySelector(`.player-control-btn.focusable[data-ctrl="${focusedCtrl}"]`)

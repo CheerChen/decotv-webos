@@ -639,15 +639,6 @@
   display: block;
 }
 
-/* Text controls (换源/列表) use a pill instead of a fixed circle. */
-.player-control-btn-text {
-  width: auto;
-  min-width: 88px;
-  padding: 0 22px;
-  border-radius: 28px;
-  font-size: 20px;
-}
-
 .player-time-label {
   font-size: 20px;
   color: var(--text-color);

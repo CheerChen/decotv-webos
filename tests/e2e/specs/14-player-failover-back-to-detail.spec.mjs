@@ -9,6 +9,8 @@ test("Back after a player failover: detail picks the source that played and mark
   await page.waitForFunction(() => window.__router?.current === "player", null, { timeout: 15000 });
   await expect(page.locator("#playerSubtitle")).toContainText("好源", { timeout: 10000 });
 
+  // Once the bar has hidden itself, a single Back leaves.
+  await expect(page.locator("#playerControls")).toHaveClass(/hidden/, { timeout: 8000 });
   await pressBack(page);
   await page.waitForFunction(() => window.__router?.current === "detail");
 

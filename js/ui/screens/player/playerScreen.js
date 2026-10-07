@@ -10,6 +10,8 @@ import { renderProbeLine } from "../../probeLabel.js";
 import { createSidePanel, focusSidePanelItem } from "./sidePanel.js";
 import { PlayerOsd } from "./playerOsd.js";
 import { PlaybackController } from "./playbackController.js";
+import { getWorkDetails } from "../../../core/catalog/workDetails.js";
+import { loadEpisodeMeta } from "../../../core/catalog/episodeMeta.js";
 
 // How often playback progress is persisted to /api/playrecords while watching.
 const RECORD_SAVE_INTERVAL_MS = 10000;
@@ -51,6 +53,9 @@ export const PlayerScreen = {
   tickTimer: null,
   episodePanelVisible: false,
   episodePanelIndex: 0,
+  work: null,             // the detail page's work, for the episode list's titles
+  episodeMeta: null,      // Map index -> { still, title } for the playing source
+  _episodeMetaFor: "",    // probe key of the source the meta belongs to
   sourcePanelVisible: false,
   sourcePanelIndex: 0,
   allSources: [],
@@ -78,6 +83,9 @@ export const PlayerScreen = {
     this.paused = false;
     this.episodePanelVisible = false;
     this.episodePanelIndex = this.index;
+    this.work = params.work || null;
+    this.episodeMeta = null;
+    this._episodeMetaFor = "";
     this.sourcePanelVisible = false;
     this.sourcePanelIndex = 0;
     this.allSources = Array.isArray(params.allSources) ? params.allSources : [];
@@ -634,6 +642,7 @@ export const PlayerScreen = {
     if (this.episodePanelVisible) {
       this.episodePanelIndex = this.index;
       this._renderEpisodePanel();
+      this._ensureEpisodeMeta();
     } else {
       this.container.querySelector("#playerEpisodePanel")?.remove();
     }
@@ -641,24 +650,56 @@ export const PlayerScreen = {
     this._resetControlsAutoHide();
   },
 
+  _currentSource() {
+    return this.allSources.find((s) => getSourceProbeKey(s) === this.currentSourceKey) || this.params || {};
+  },
+
+  // Official episode titles for the playing source, as detail's episode
+  // cards show them (same provider rules, same memo, so usually instant).
+  // The list opens with plain labels and gains the titles when they land.
+  async _ensureEpisodeMeta() {
+    const src = this._currentSource();
+    const forKey = this.currentSourceKey;
+    if (!this.work || this._episodeMetaFor === forKey) return;
+    this._episodeMetaFor = forKey;
+    this.episodeMeta = null;
+    const details = await getWorkDetails(this.work);
+    const meta = details ? await loadEpisodeMeta(this.work, details, src) : new Map();
+    // A remount or a source switch since has reset or moved the key.
+    if (this._episodeMetaFor !== forKey || !meta.size) return;
+    this.episodeMeta = meta;
+    if (this.episodePanelVisible) this._renderEpisodePanel();
+  },
+
   _renderEpisodePanel() {
-    this.container.querySelector("#playerEpisodePanel")?.remove();
-    const src = this.allSources.find((s) => getSourceProbeKey(s) === this.currentSourceKey) || this.params || {};
+    const old = this.container.querySelector("#playerEpisodePanel");
+    // Re-rendering for late titles keeps the focused row focused.
+    const focusedIndex = Number(old?.querySelector(".player-side-item.focused")?.dataset?.panelIndex);
+    const focusIndex = Number.isInteger(focusedIndex) ? focusedIndex : this.episodePanelIndex;
+    old?.remove();
+    const src = this._currentSource();
+    const meta = this._episodeMetaFor === this.currentSourceKey ? this.episodeMeta : null;
     const panel = createSidePanel({
       id: "playerEpisodePanel",
       title: "剧集列表",
       hint: "▲▼ 选择 · OK 播放 · 返回 关闭",
       listId: "playerEpisodeList",
-      items: this.episodes.map((_, i) => ({
-        label: episodeLabel(src, i),
-        sub: i === this.index ? "正在播放" : "",
-        selected: i === this.episodePanelIndex,
-        attrs: { "data-panel-index": i },
-      })),
+      // With an official title, the title leads and the number moves to
+      // the second line.
+      items: this.episodes.map((_, i) => {
+        const title = meta?.get(i)?.title || "";
+        const no = episodeLabel(src, i);
+        return {
+          label: title || no,
+          sub: [title ? no : "", i === this.index ? "正在播放" : ""].filter(Boolean).join(" · "),
+          selected: i === this.episodePanelIndex,
+          attrs: { "data-panel-index": i },
+        };
+      }),
     });
     this.container.appendChild(panel);
     ScreenUtils.indexFocusables(panel);
-    focusSidePanelItem(panel, `[data-panel-index="${this.episodePanelIndex}"]`);
+    focusSidePanelItem(panel, `[data-panel-index="${focusIndex}"]`);
   },
 
   _closeEpisodePanel() {
@@ -808,7 +849,12 @@ export const PlayerScreen = {
       this._closeEpisodePanel();
       return true;
     }
-    // No panel open: tear down playback state, then return false so Router.back()
+    // The bar is up: this Back only puts it away; the next one leaves.
+    if (this.osd?.controlsVisible) {
+      this.setControlsVisible(false);
+      return true;
+    }
+    // Nothing on screen: tear down playback state, then return false so Router.back()
     // proceeds to pop the stack and navigate to detail. We must NOT call
     // Router.back() here — Router.back() calls consumeBackRequest() first,
     // so calling back() from inside consumeBackRequest() deadlocks (back()

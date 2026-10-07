@@ -8,6 +8,12 @@ test("Back from player restores detail from cache; Back again returns home", asy
   await press(page, "Enter");
   await page.waitForFunction(() => window.__router?.current === "player", null, { timeout: 15000 });
 
+  // The bar is up on entry: the first Back only puts it away.
+  await expect(page.locator("#playerControls")).not.toHaveClass(/hidden/);
+  await pressBack(page);
+  await expect(page.locator("#playerControls")).toHaveClass(/hidden/);
+  expect(await page.evaluate(() => window.__router.current)).toBe("player");
+
   await pressBack(page);
   await page.waitForFunction(() => window.__router?.current === "detail");
 

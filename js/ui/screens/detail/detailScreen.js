@@ -877,7 +877,9 @@ export const DetailScreen = {
       allSources: this.sources,
       probeResults: this.probeResults,
       preferSession: this.preferSession,
-      currentSourceKey: getSourceProbeKey(source)
+      currentSourceKey: getSourceProbeKey(source),
+      // The episode list titles its rows from the work's own provider.
+      work: this.work
     });
   },
 
